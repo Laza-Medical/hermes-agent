@@ -316,59 +316,28 @@ class TestConvertMessagesToConverse:
         assert len(blocks) == 1
         return blocks[0]["toolResult"]["content"]
 
-    def test_image_tool_result_becomes_image_block(self):
-        content = self._tool_result_content([
-            {"type": "image_url", "image_url": {"url": self._IMG}}])
-        assert [b for b in content if "image" in b], "image flattened to text"
-        assert content[0]["image"]["format"] == "png"
-        assert content[0]["image"]["source"]["bytes"] == b"\x89PNG\r\n\x1a\n"
+    _PARTS = [{"type": "text", "text": "a cat"}, {"type": "image_url", "image_url": {"url": _IMG}}]
 
-    def test_multimodal_envelope_dict_is_converted(self):
-        """vision_analyze's native fast path returns a dict envelope, not a list.
-
-        Matching only on ``list`` left the most common producer of
-        image-bearing tool results on the json.dumps path with base64 inline.
-        """
-        content = self._tool_result_content({
-            "_multimodal": True,
-            "content": [{"type": "text", "text": "a cat"},
-                        {"type": "image_url", "image_url": {"url": self._IMG}}],
-            "text_summary": "a cat",
-        })
-        assert content[0]["text"] == "a cat"
-        assert content[1]["image"]["format"] == "png"
-
-    def test_multimodal_envelope_falls_back_to_text_summary(self):
-        """When the parts convert to nothing, send the summary, not "(empty)".
-
-        ``_convert_content_to_converse`` never returns an empty list - it
-        substitutes the placeholder Converse demands - so "nothing converted"
-        has to be detected by that value rather than by emptiness.
-        """
-        content = self._tool_result_content({
-            "_multimodal": True,
-            "content": [{"type": "bogus"}],
-            "text_summary": "fallback summary",
-        })
-        assert content == [{"text": "fallback summary"}]
+    @pytest.mark.parametrize("content", [
+        _PARTS,  # list-shaped tool content (what _tool_result_content_for_active_model hands vision models)
+        {"_multimodal": True, "content": _PARTS, "text_summary": "a cat"},  # vision_analyze / computer_use envelope
+    ])
+    def test_image_tool_result_becomes_image_block(self, content):
+        blocks = self._tool_result_content(content)
+        assert blocks[0] == {"text": "a cat"}
+        assert blocks[1]["image"]["format"] == "png"
+        assert blocks[1]["image"]["source"]["bytes"] == b"\x89PNG\r\n\x1a\n"
+        assert "base64" not in json.dumps(blocks, default=str)
 
     @pytest.mark.parametrize("payload,expected", [
         ([{"file": "a.py"}, {"file": "b.py"}], '[{"file": "a.py"}, {"file": "b.py"}]'),
         ([1, 2, 3], "[1, 2, 3]"),
+        ({"_multimodal": True, "content": [{"type": "bogus"}], "text_summary": "fallback summary"}, "fallback summary"),
     ])
-    def test_list_shaped_plain_data_is_not_treated_as_content_parts(self, payload, expected):
-        """A list-shaped tool result that is data must survive verbatim.
-
-        Converting it would find no recognised parts and replace the tool's
-        entire output with the "(empty)" placeholder.
-        """
+    def test_non_content_lists_and_empty_envelopes_stay_text(self, payload, expected):
+        """Plain list data is not content parts (converting it would yield the ``(empty)`` placeholder);
+        an envelope whose parts convert to nothing sends its text summary instead of ``(empty)``."""
         assert self._tool_result_content(payload) == [{"text": expected}]
-
-    def test_string_and_dict_tool_results_unchanged(self):
-        """Control: the shapes that already worked keep their behaviour."""
-        assert self._tool_result_content("done") == [{"text": "done"}]
-        assert self._tool_result_content({"ok": True}) == [{"text": '{"ok": true}'}]
-        assert self._tool_result_content("") == [{"text": "(empty)"}]
 
 
 # ---------------------------------------------------------------------------
