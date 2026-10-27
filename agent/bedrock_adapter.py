@@ -777,9 +777,12 @@ def _decode_redacted(encoded) -> Optional[bytes]:
         return None
 
 
-def _replay_ordered_blocks(ordered_blocks: list) -> list[dict]:
+def _replay_ordered_blocks(ordered_blocks: list, tool_call_ids: set[str]) -> list[dict]:
     """Rebuild the exact Bedrock block sequence captured at normalization time; redacted reasoning is
-    stored base64 (JSON-safe sidecar) and undecodable entries are skipped."""
+    stored base64 (JSON-safe sidecar) and undecodable entries are skipped. A toolUse whose id is no
+    longer in ``tool_calls`` is skipped too: post-call guardrails (identical-call dedup, delegate cap)
+    drop calls after capture, and replaying one sends a toolUse with no toolResult (ValidationException
+    "Expected toolResult blocks")."""
     content_blocks: list[dict] = []
     for block in ordered_blocks:
         if not isinstance(block, dict):
@@ -804,6 +807,8 @@ def _replay_ordered_blocks(ordered_blocks: list) -> list[dict]:
                     content_blocks.append({"reasoningContent": {"redactedContent": redacted}})
         elif "toolUse" in block and isinstance(block["toolUse"], dict):
             tu = block["toolUse"]
+            if tu.get("toolUseId", "") not in tool_call_ids:
+                continue
             content_blocks.append(_tool_use_block(tu.get("toolUseId", ""), tu.get("name", ""), tu.get("input", {})))
     return content_blocks
 
@@ -875,14 +880,30 @@ def _reasoning_details_blocks(msg: dict, claude: bool, own: bool = False) -> lis
     return blocks
 
 
+def _tool_call_blocks(tool_calls: list) -> list[dict]:
+    """OpenAI ``tool_calls`` → Converse toolUse blocks."""
+    return [
+        _tool_use_block(tc.get("id", ""), fn.get("name", ""), _parse_tool_args(fn.get("arguments", "{}")))
+        for tc in tool_calls if isinstance(tc, dict)
+        for fn in [tc.get("function") or {}]
+    ]
+
+
 def _assistant_blocks(msg: dict, content, claude: bool = True, own: bool = False) -> list[dict]:
     """Assistant message → Converse blocks, from the first carrier that yields any: the ordered
-    ``bedrock_content_blocks`` sidecar, (Claude only) the ordered ``anthropic_content_blocks`` sidecar,
-    else thinking from ``reasoning_details`` followed by text, then tool calls. Anthropic-shaped carriers
-    hold Claude signatures, so other models never read them."""
+    ``bedrock_content_blocks`` sidecar (authoritative for block order, ``tool_calls`` for which toolUse
+    blocks exist: ids it lacks are skipped by the replay and ids the replay lost are appended, so every
+    toolResult that follows has its toolUse), (Claude only) the ordered ``anthropic_content_blocks``
+    sidecar, else thinking from ``reasoning_details`` followed by text, then tool calls. Anthropic-shaped
+    carriers hold Claude signatures, so other models never read them."""
     ordered_blocks = msg.get("bedrock_content_blocks")
-    if isinstance(ordered_blocks, list) and (content_blocks := _replay_ordered_blocks(ordered_blocks)):
-        return content_blocks
+    tool_calls = msg.get("tool_calls") or []
+    tool_call_ids = {tc.get("id", "") for tc in tool_calls if isinstance(tc, dict)}
+    if isinstance(ordered_blocks, list) and (content_blocks := _replay_ordered_blocks(ordered_blocks, tool_call_ids)):
+        replayed = {block["toolUse"]["toolUseId"] for block in content_blocks if "toolUse" in block}
+        return content_blocks + _tool_call_blocks(
+            [tc for tc in tool_calls if isinstance(tc, dict) and tc.get("id", "") not in replayed]
+        )
     if claude and (content_blocks := _anthropic_ordered_blocks(msg)):
         return content_blocks
     content_blocks = _reasoning_details_blocks(msg, claude, own)
@@ -890,9 +911,7 @@ def _assistant_blocks(msg: dict, content, claude: bool = True, own: bool = False
         content_blocks.append({"text": content})
     elif isinstance(content, list):
         content_blocks.extend(_convert_content_to_converse(content))
-    for tc in (msg.get("tool_calls", []) or []):
-        fn = tc.get("function", {})
-        content_blocks.append(_tool_use_block(tc.get("id", ""), fn.get("name", ""), _parse_tool_args(fn.get("arguments", "{}"))))
+    content_blocks.extend(_tool_call_blocks(tool_calls))
     return content_blocks
 
 
