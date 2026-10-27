@@ -4143,6 +4143,9 @@
      "type": "adaptive"
     }
    },
+   "inferenceConfig": {
+    "maxTokens": 128000
+   },
    "messages": [
     {
      "content": [
@@ -4234,6 +4237,9 @@
   "off": {
    "__bedrock_converse__": true,
    "__bedrock_region__": "us-east-1",
+   "inferenceConfig": {
+    "maxTokens": 128000
+   },
    "messages": [
     {
      "content": [
@@ -4324,6 +4330,9 @@
   "unset": {
    "__bedrock_converse__": true,
    "__bedrock_region__": "us-east-1",
+   "inferenceConfig": {
+    "maxTokens": 128000
+   },
    "messages": [
     {
      "content": [
