@@ -271,9 +271,10 @@ class CLIAgentSetupMixin:
         with deferred_token_mint():
             try:
                 # target_model: the ladder's model-keyed rungs (Zen/Go api_mode, per-model
-                # api_mode) must see the model this CLI will actually send, not config's `default`,
-                # or `hermes -m mimo-v2.5 --provider opencode-go` resolves an api_mode/base_url the
-                # sent model cannot use (#112600).
+                # api_mode, Bedrock's Mantle/AnthropicBedrock/Converse split) must see the model
+                # this CLI will actually send, not config's `default`, or `hermes -m mimo-v2.5
+                # --provider opencode-go` resolves an api_mode/base_url the sent model cannot
+                # use (#112600).
                 runtime = resolve_runtime_provider(
                     requested=self.requested_provider, explicit_api_key=self._explicit_api_key,
                     explicit_base_url=self._explicit_base_url, target_model=self.model or None)
@@ -431,9 +432,12 @@ class CLIAgentSetupMixin:
         from hermes_cli.runtime_provider import deferred_token_mint, resolve_runtime_provider
         try:
             with deferred_token_mint():  # a readiness probe never needs a live token
+                # A host without a `model` attribute (a test stub) probes config's default; the CLI
+                # sets `model` to the -m model or config's model.
                 runtime = resolve_runtime_provider(
                     requested=self.requested_provider, explicit_api_key=self._explicit_api_key,
-                    explicit_base_url=self._explicit_base_url)
+                    explicit_base_url=self._explicit_base_url,
+                    target_model=getattr(self, "model", None) or None)
         except Exception as exc:
             return False, exc
         if not isinstance(runtime, dict):
