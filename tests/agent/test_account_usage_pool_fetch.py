@@ -147,10 +147,11 @@ def test_anthropic_fetch_honors_explicit_api_key_and_marks_model_scoped_windows(
 
     def fake_get_json(url, headers, *, timeout):
         called["url"], called["headers"] = url, headers
-        return {"five_hour": {"utilization": 0.3, "resets_at": "2026-10-05T12:00:00Z"},
-                "seven_day": {"utilization": 0.2, "resets_at": "2026-10-08T12:00:00Z"},
-                "seven_day_opus": {"utilization": 1.0, "resets_at": "2026-10-09T12:00:00Z"},
-                "seven_day_sonnet": {"utilization": 0.4, "resets_at": "2026-10-09T12:00:00Z"}}
+        # ``utilization`` is a whole percent (see test_account_usage_scoped_weekly).
+        return {"five_hour": {"utilization": 30.0, "resets_at": "2026-10-05T12:00:00Z"},
+                "seven_day": {"utilization": 20.0, "resets_at": "2026-10-08T12:00:00Z"},
+                "seven_day_opus": {"utilization": 100.0, "resets_at": "2026-10-09T12:00:00Z"},
+                "seven_day_sonnet": {"utilization": 40.0, "resets_at": "2026-10-09T12:00:00Z"}}
 
     monkeypatch.setattr(account_usage, "_get_json", fake_get_json)
     monkeypatch.setattr(account_usage, "resolve_anthropic_token",
@@ -184,3 +185,19 @@ def test_read_only_fetch_remembered_under_identity_slot(monkeypatch, tmp_path):
     assert snapshot is not None and snapshot.windows[0].used_percent == 66.0
     assert cached_account_usage("openai-codex") is None, \
         "a per-credential snapshot must never pose as the provider-wide gauge"
+
+
+def test_anthropic_fetch_reports_limits_windows_and_scoped_weekly_caps(monkeypatch):
+    """The fetcher wires both readers: ``limits[]`` account windows first, the legacy keys for the
+    windows it omits, and a per-model ``weekly_scoped`` cap as a ``model``-scope window."""
+    payload = {"limits": [
+        {"kind": "session", "percent": 36, "resets_at": "2026-10-05T12:00:00Z", "scope": None},
+        {"kind": "weekly_scoped", "percent": 57, "resets_at": "2026-10-09T12:00:00Z",
+         "scope": {"model": {"display_name": "Fable"}}}],
+        "seven_day": {"utilization": 20.0, "resets_at": "2026-10-08T12:00:00Z"}}
+    monkeypatch.setattr(account_usage, "_get_json", lambda url, headers, *, timeout: payload)
+
+    snapshot = fetch_account_usage("anthropic", api_key="sk-ant-oat-explicit-token")
+
+    assert [(w.label, w.used_percent, w.scope) for w in snapshot.windows] == [
+        ("Current session", 36.0, "account"), ("Current week", 20.0, "account"), ("Fable week", 57.0, "model")]
