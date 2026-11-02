@@ -189,10 +189,10 @@ def test_iam_denied_stream_fallback_recovers_binding_once(retry_fails):
     kwargs["__bedrock_region__"] = "eu-west-1"
     original = copy.deepcopy(_wire(kwargs))
     agent = _StreamAgent()
-    regions = []
+    routes = []
 
-    def runtime(region):
-        regions.append(region)
+    def runtime(region, model=None):
+        routes.append((region, model))
         return client
 
     with patch("agent.bedrock_adapter._get_bedrock_runtime_client", side_effect=runtime):
@@ -205,7 +205,8 @@ def test_iam_denied_stream_fallback_recovers_binding_once(retry_fails):
             response = stream._open_stream(kwargs)
             assert response.choices[0].message.content == "done"
     assert agent._disable_streaming is True
-    assert regions and all(region == "eu-west-1" for region in regions)
+    # Every client, the fallback's included, is the request's region and model (its timeout slot).
+    assert routes and all(route == ("eu-west-1", ADAPTIVE) for route in routes)
     assert [op for op, _ in client.calls] == ["converse_stream", "converse", "converse"]
     assert client.calls[0][1] == client.calls[1][1] == original
     retried = client.calls[2][1]
