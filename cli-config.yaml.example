@@ -296,8 +296,9 @@ model:
 #
 # AWS Bedrock (providers.bedrock): the resolved value is the socket read
 # timeout of the boto3 Converse client and of the AnthropicBedrock SDK
-# client, chosen per request for the active model. Connect stays fixed
-# (botocore 60s / SDK 10s); unset keeps botocore's 60s read on Converse.
+# client, chosen per request for the active model; the provider-level value
+# also covers the control-plane client. Converse connect is the smaller of the
+# read timeout and 60s (SDK: 10s); unset keeps botocore's 60s read on Converse.
 #
 # providers:
 #   ollama-local:
