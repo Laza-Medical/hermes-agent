@@ -92,10 +92,9 @@ def _approval_request_event(run_id: str, approval_data: Optional[dict[str, Any]]
     chat completions): the flagged command redacted before egress (#48456), the ``_run_event``
     envelope, and the ``choices`` the client may send back to ``POST /v1/runs/{id}/approval``."""
     from gateway.platforms.api_server_runs import _run_event
-    event = dict(approval_data or {})
-    if "command" in event:
-        from gateway.run import _redact_approval_command
-        event["command"] = _redact_approval_command(event.get("command"))
+    from gateway.run import _redact_approval_command
+    event = dict(approval_data or {})  # consent prompts (MCP, vault) carry server/model text in the description
+    event.update({k: _redact_approval_command(event[k]) for k in ("command", "description") if k in event})
     event.update(_run_event(run_id, "approval.request", **fields, choices=_approval_event_choices(
         smart_denied=bool(event.get("smart_denied")),
         allow_session=event.get("allow_session") is not False,
@@ -236,8 +235,7 @@ def _clean_request_string(value: Any) -> Optional[str]:
 
 # model_options decoding lives in the topical sibling (line-cap offset);
 # re-exported here so importers are unaffected.
-from gateway.platforms.api_server_request_options import (
-    _request_reasoning_config, _request_service_tier)
+from gateway.platforms.api_server_request_options import _request_reasoning_config, _request_service_tier
 
 
 def _apply_runtime_agent_overrides(
@@ -3964,9 +3962,10 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                 retryable=False)
             return False
         try:
-            mws = [mw for mw in (
-                self._make_profile_prefix_middleware(), cors_middleware, body_limit_middleware,
-                security_headers_middleware) if mw is not None]
+            from gateway.platforms.api_server_config_guard import config_unavailable_middleware
+            mws = [mw for mw in (  # the config guard outermost: entering a profile scope reads config
+                config_unavailable_middleware, self._make_profile_prefix_middleware(), cors_middleware,
+                body_limit_middleware, security_headers_middleware) if mw is not None]
             self._app = web.Application(middlewares=mws, client_max_size=MAX_REQUEST_BYTES)
             assert self._app is not None
             # Native routes + multiplex /p/<profile>/ mirrors (the prefix middleware validates and

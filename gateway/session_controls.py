@@ -150,14 +150,16 @@ class AuthorityConnection:
         if (not identity.get('user_id')
                 or identity.get('instance_id', authority.instance_id) != authority.instance_id):
             capabilities = frozenset()
-        from gateway.session_identity import authenticated_subject
-        self.actor = Principal(authenticated_subject(identity),
+        from gateway.owner_identity import principal_subject
+        self.actor = Principal(principal_subject(identity),
                                identity.get('profile_id', authority.profile_id),
                                capabilities, uuid.uuid4().hex)
         from gateway.session_local_migration import bind_native_transport
         bind_native_transport(authority, self.actor, identity)
         self.native_owner = identity.get('native_bootstrap') is True
         self.subscriptions = {}
+        # session_id -> (epoch, sequence) the last reconnect replay answered; spent by the next resume.
+        self.replay_cursors = {}
         self.handed_back = set()  # sessions this live client detached without closing (the TUI's switcher)
         self._identity, self._operator, self._siblings = identity, operator, {}
         authority.events[self.actor.transport_id] = transport
@@ -317,6 +319,7 @@ class AuthorityConnection:
         ref = SessionRef(self.actor.profile_id, params.get('session_id', ''))
         from tui_gateway.contracts.registry import (
             CANONICAL_METHODS, METHODS, canonical_param_problems, check_params_accepted, check_result,
+            unknown_method_message,
         )
         contract = CANONICAL_METHODS.get(method)
         if contract is not None and (problems := canonical_param_problems(contract, params)):
@@ -341,9 +344,9 @@ class AuthorityConnection:
             # ``_load_gateway_config`` / ``build_policy(get_hermes_home())`` never snapshot the
             # launch profile's config into a served secondary's session. Under a single profile
             # the scope is that profile's own home, so behaviour is unchanged.
-            from gateway.session_authorities import owner_scope
+            from gateway.session_authorities import async_owner_scope
             from gateway.session_connections import METHODS as CONNECTION_METHODS, session_owned
-            with owner_scope(self.authority):
+            async with async_owner_scope(self.authority):
                 if method in GROUP_METHODS or method == 'profiles.list':
                     result = await dispatch_group_control(self, method, params)
                 elif method not in handlers or (method in CONNECTION_METHODS and not session_owned(params)):
@@ -351,7 +354,7 @@ class AuthorityConnection:
                     # 4001 'invalid_params' would read as a bad argument on a method that exists.
                     # An account-owned connector call (the Connectors page) keeps its legacy handler.
                     return {'jsonrpc': '2.0', 'id': rid, 'error': {
-                        'code': -32601, 'message': f'unknown method: {method}',
+                        'code': -32601, 'message': unknown_method_message(method),
                         'data': {'reason': 'unknown_method'}}}
                 else:
                     result = await handlers[method](ref, params)
@@ -605,6 +608,8 @@ class AuthorityConnection:
 
     async def resume(self, ref, params):
         from gateway.session_local_inventory import snapshot_info
+        replay_from = self.replay_cursors.pop(ref.session_id, None)
+        requested = ref.session_id
         if 'latest' in params:
             # Bare `-c` / `--resume latest`: the most recent session of that surface family the
             # actor may read (workspace first), resolved by the owner like a title.
@@ -622,7 +627,7 @@ class AuthorityConnection:
                 resolved_id = self.authority.db.resolve_session_id(ref.session_id)
                 if resolved_id is not None:
                     ref = SessionRef(ref.profile_id, resolved_id)
-            from gateway.session_local_migration import resolve_local_target
+            from gateway.session_local_migration import adopts_client_history, resolve_local_target
             from gateway.session_policy_refresh import refresh_settled
             from hermes_state_local_migration import LEGACY_LOCAL_SOURCES
             # Another viewer's refresh mid-cleanup has committed a policy it has not published yet.
@@ -631,7 +636,8 @@ class AuthorityConnection:
             # Canonical LOCAL compression/reset segments keep the receipt on their logical
             # owner, not on the physical transcript ID the history picker / Desktop supplies
             # after list_sessions projects the tip (#139306).
-            if row and row['source'] in LEGACY_LOCAL_SOURCES | {Platform.LOCAL.value}:
+            if row and (row['source'] in LEGACY_LOCAL_SOURCES | {Platform.LOCAL.value}
+                        or adopts_client_history(self.authority, self.actor, row)):
                 ref = resolve_local_target(self.authority, self.actor,
                     self.authority.db.get_compression_tip(ref.session_id) or ref.session_id)
             elif row:
@@ -663,7 +669,8 @@ class AuthorityConnection:
         # ``omit_messages``: the client pages the transcript itself (Desktop over REST), so the attach reads no
         # compression lineage (a whole-lineage read here made every open of a long chat cost seconds).
         omit = params.get('omit_messages') is True
-        snapshot = await self.authority.attach(self.actor, ref, history=not omit)
+        snapshot = await self.authority.attach(
+            self.actor, ref, history=not omit, replay_from=replay_from if ref.session_id == requested else None)
         self.subscriptions[ref.session_id] = snapshot.subscription_id
         self.handed_back.discard(ref.session_id)
         self._spawn_notice(ref)
@@ -737,7 +744,11 @@ class AuthorityConnection:
             raise RuntimeStoreError('invalid_params')
         from gateway.session_server_requests import open_requests
         stream = self.authority.sessions[ref.session_id].event_stream
-        return {**stream.since(epoch, sequence), 'open_requests': open_requests(stream, ref.session_id)}
+        replay = stream.since(epoch, sequence)
+        if not replay['snapshot_required']:
+            self.replay_cursors[ref.session_id] = (
+                replay['replay_epoch'], max((frame['seq'] for frame in replay['events']), default=sequence))
+        return {**replay, 'open_requests': open_requests(stream, ref.session_id)}
 
     async def submit(self, ref, params):
         if self._voice_stop_replay(ref, params) or await self._typed_voice_stop(ref, params):
