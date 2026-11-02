@@ -119,7 +119,7 @@ class _SlowModels(http.server.BaseHTTPRequestHandler):
     delay = 2.0
 
     def do_GET(self):
-        time.sleep(self.delay)
+        time.sleep(self.delay)  # health: allow HX013 -- the delayed response is the read timeout under test
         body = b'{"modelSummaries": []}'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
