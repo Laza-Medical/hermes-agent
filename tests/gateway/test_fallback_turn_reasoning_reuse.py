@@ -58,7 +58,7 @@ def _cached_agent(runner):
     return entries[0]
 
 
-def test_reused_agent_drops_the_previous_turns_pin(gateway_home, monkeypatch):
+def test_reused_agent_drops_the_previous_turns_pin(gateway_home, monkeypatch):  # health: allow F811 -- pytest injects the imported gateway_home fixture by parameter name
     # A configured primary, so the turn that stays on it keeps its cached agent (the post-turn
     # fallback check evicts an agent whose model differs from the configured one).
     (gateway_home / "config.yaml").write_text(_CONFIG + "model:\n  default: primary-model\n  provider: openrouter\n",
