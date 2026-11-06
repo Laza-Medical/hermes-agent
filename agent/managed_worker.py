@@ -433,11 +433,15 @@ def _construct_agent(frame, factory, policy, **kwargs):
     still books the one-shot exit mapping (quota wall 75, re-login 78) before the crash."""
     try:
         from gateway.session_worker_construct import worker_route
-        return factory(**{**kwargs, **worker_route(policy, kwargs)})
+        agent = factory(**{**kwargs, **worker_route(policy, kwargs)})
     except Exception as exc:
         from gateway.session_kanban import record_start_failure
         record_start_failure(frame, exc)
         raise
+    # A launch ``--reasoning`` (``hermes -z``) or a committed ``/reasoning`` is the session's own level,
+    # which a provider fallback keeps, as on the in-process turn (TurnRunner._wire_turn_agent_callbacks).
+    agent.reasoning_pinned = policy.reasoning_pinned(None)
+    return agent
 
 
 def hello():
