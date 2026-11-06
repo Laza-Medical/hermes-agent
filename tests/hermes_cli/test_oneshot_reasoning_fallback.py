@@ -50,11 +50,11 @@ def _oneshot_turn(monkeypatch, tmp_path, *flags):
     return _turn(_runner(), source)["final_response"]
 
 
-def test_reasoning_flag_survives_fallback(gateway_home, tmp_path, monkeypatch):
+def test_reasoning_flag_survives_fallback(gateway_home, tmp_path, monkeypatch):  # health: allow F811 -- pytest injects the imported gateway_home fixture by parameter name
     assert _oneshot_turn(monkeypatch, tmp_path, "--reasoning", "high") == "fb-model:high"
 
 
-def test_without_the_flag_fallback_resolves_the_fallback_models_config(gateway_home, tmp_path, monkeypatch):
+def test_without_the_flag_fallback_resolves_the_fallback_models_config(gateway_home, tmp_path, monkeypatch):  # health: allow F811 -- pytest injects the imported gateway_home fixture by parameter name
     assert _oneshot_turn(monkeypatch, tmp_path) == "fb-model:low"
 
 
