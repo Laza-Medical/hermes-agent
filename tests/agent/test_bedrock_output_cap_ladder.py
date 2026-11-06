@@ -12,7 +12,7 @@ _MSGS = [{"role": "user", "content": "hi"}]
 
 
 def _bedrock_agent(model="global.anthropic.claude-sonnet-5-5", max_tokens=None, ephemeral=None):
-    import agent.transports.bedrock  # noqa: F401
+    import agent.transports.bedrock  # registers the bedrock_converse transport
     transport = get_transport("bedrock_converse")
     return SimpleNamespace(
         model=model, api_mode="bedrock_converse", max_tokens=max_tokens,

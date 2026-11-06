@@ -361,7 +361,7 @@ class TestE2ENativeTurnCheckpointDelivery:
         # Verify wire requests made to client
         steer_requests = [req for req in client.requests if req[0] == "turn/steer"]
         assert len(steer_requests) == 1, "Exactly one checkpoint request must be delivered before turn completion"
-        method, params = steer_requests[0]
+        _method, params = steer_requests[0]
         assert params["expectedTurnId"] == "turn-fake-001"
         assert any("Automatic Trail Checkpoint" in part["text"] for part in params["input"])
 

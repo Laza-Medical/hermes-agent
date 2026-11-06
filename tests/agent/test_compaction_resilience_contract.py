@@ -173,7 +173,7 @@ def test_forced_compaction_via_compact_thread_production_caller(tmp_path, monkey
          compression_count to 2 and emits on_compaction_complete with count 2 (not swallowed, not duplicate).
     """
     import agent.conversation_compression as cc
-    import hermes_cli.lifecycle as lifecycle
+    from hermes_cli import lifecycle
     from tests.agent.transports.test_codex_app_server_session import FakeClient, make_session
 
     home = tmp_path / "home_forced_caller"

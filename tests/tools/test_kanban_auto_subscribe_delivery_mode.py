@@ -30,7 +30,7 @@ def subscription_home(tmp_path, monkeypatch):
 def test_create_subscription_delivery_mode(subscription_home, config, expected, warns, caplog):
     from gateway.session_context import clear_session_vars, set_session_vars
     from hermes_cli import kanban_db_connect as kbc, kanban_db_notify as kbn
-    from tools import kanban_tools  # noqa: F401 -- registers the real tool handler
+    from tools import kanban_tools  # registers the real tool handler
     from tools.registry import registry
 
     (subscription_home / "config.yaml").write_text(config)

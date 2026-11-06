@@ -50,7 +50,7 @@ def test_mutant_resume_epoch_disabled(tmp_path, monkeypatch):
 
     # Force colliding nonce to simulate recycled address / shared epoch defect:
     nonce1 = mod._get_counter_nonce(agent1)
-    setattr(comp2, "_trail_counter_epoch", nonce1)
+    setattr(comp2, "_trail_counter_epoch", nonce1)  # noqa: B010 -- the plugin's own bookkeeping, not a ContextCompressor field
 
     # With colliding nonce, instance 2 is falsely suppressed by instance 1's durable record:
     assert mod.handle_compaction_complete(session_id="sess-mutant-resume", compression_count=1, agent=agent2) is False
