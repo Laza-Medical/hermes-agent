@@ -99,7 +99,7 @@ async def _assert_wakes(runner, authority, ref, task_id):
 @pytest.mark.asyncio
 async def test_kanban_wake_reaches_a_local_session(tmp_path, monkeypatch):
     from gateway.session_authority import SessionAuthority, initialize_session_authority
-    from gateway.session_contract import Principal
+    from gateway.session_contract import SessionActor
     from gateway.session_local import LocalSessionAdapter, create_local_session
     from hermes_state import AsyncSessionDB, SessionDB
 
@@ -111,8 +111,8 @@ async def test_kanban_wake_reaches_a_local_session(tmp_path, monkeypatch):
     runner._session_db = AsyncSessionDB(db)
     authority = await initialize_session_authority(runner, profile_id='default', instance_id='owner', db=db)
     try:
-        actor = Principal('uid:501', 'default', frozenset({'session:create', 'session:submit', 'session:read'}),
-                          'fixture')
+        actor = SessionActor('uid:501', 'default', frozenset({'session:create', 'session:submit', 'session:read'}),
+                             'fixture')
         ref = create_local_session(authority, actor, dict(request_id='desk', source='gui', model='fixture',
                                                           toolsets=[]))
         assert isinstance(runner.adapters.get(Platform.LOCAL), LocalSessionAdapter)

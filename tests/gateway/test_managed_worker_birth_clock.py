@@ -76,7 +76,7 @@ def _step_wall_clock(monkeypatch, pid):
 def _owner(tmp_path, monkeypatch):
     from gateway.config import Platform
     from gateway.session_authority import LiveSession, SessionAuthority
-    from gateway.session_contract import Principal, SessionRef
+    from gateway.session_contract import SessionActor, SessionRef
     from tools.async_delegation import _initialize_schema
 
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
@@ -89,7 +89,7 @@ def _owner(tmp_path, monkeypatch):
     authority = SessionAuthority(runner, profile_id='p', instance_id='owner', db=db,
                                  epoch=begin_runtime_epoch(db, instance_id='owner'))
     authority.sessions['owned'] = LiveSession(SimpleNamespace(platform=Platform.TELEGRAM, user_id='human'), 'route')
-    worker = SimpleNamespace(authority=authority, actor=Principal('human', 'p', frozenset({'worker:adopt'}), 't'))
+    worker = SimpleNamespace(authority=authority, actor=SessionActor('human', 'p', frozenset({'worker:adopt'}), 't'))
     return db, authority, worker, SessionRef('p', 'owned')
 
 

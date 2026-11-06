@@ -30,7 +30,7 @@ def _admit_this_process(tmp_path, monkeypatch):
     """Run the real owner admission for one card; return (board conn factory, task id, receipt)."""
     from hermes_cli import kanban_db as kb
     from hermes_cli.kanban_db_connect import connect
-    from gateway.session_contract import Principal
+    from gateway.session_contract import SessionActor
     from gateway.session_kanban import run_task
     monkeypatch.setenv('HERMES_KANBAN_HOME', str(tmp_path))
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
@@ -60,7 +60,7 @@ def _admit_this_process(tmp_path, monkeypatch):
         pass
     db = SimpleNamespace(get_session=lambda sid: None, db_path=str(tmp_path / 'state.db'))
     authority = SimpleNamespace(profile_id=str(tmp_path), db=db, submit=submit)
-    actor = Principal('owner', str(tmp_path), frozenset({'session:create'}), 'transport')
+    actor = SessionActor('owner', str(tmp_path), frozenset({'session:create'}), 'transport')
     connection = SimpleNamespace(authority=authority, actor=actor, native_owner=True, resume=resume)
     asyncio.run(run_task(connection, dict(board='owned', task_id=task_id, run_id=task.current_run_id,
                                           claim_lock=task.claim_lock)))
