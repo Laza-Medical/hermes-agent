@@ -3,54 +3,68 @@
 ``--reasoning`` outranks ``agent.reasoning_overrides`` and the global ``agent.reasoning_effort``; a
 fallback activated during the run must keep it, and a run without it still resolves the fallback
 model's config.
+
+The one-shot run is a gateway session (upstream 936f3465f8 removed the in-process runner): the parsed
+flag becomes a ``session.create`` field (``hermes_cli.gateway_chat._requested_policy``), the session's
+policy owns it (``LocalSessionPolicy.reasoning_pinned``) and the turn hands it to the agent. These tests
+start from the real ``hermes -z`` argv, so a flag dropped on the way to the session fails here.
 """
 
-from unittest.mock import MagicMock, patch
+import sys
 
 import pytest
 
-from run_agent import AIAgent
+from tests.gateway.test_fallback_session_reasoning import _runner, _turn, gateway_home
 
-_CFG = {"model": {"default": "primary-model", "provider": "openrouter"},
-        "agent": {"reasoning_effort": "medium", "reasoning_overrides": {"fb-model": "low"}},
-        "fallback_providers": [{"provider": "openai", "model": "fb-model"}]}
+_CFG = {"agent": {"reasoning_effort": "medium", "reasoning_overrides": {"fb-model": "low"}}}
 
 
-class _FallsBackAgent(AIAgent):
-    """The real agent; its run activates the configured fallback and reports the level it runs."""
+def _oneshot_create_params(monkeypatch, *flags):
+    """The ``session.create`` fields ``hermes -z ping <flags>`` sends (the launcher is stubbed)."""
+    import hermes_cli.main as main_mod
+    from hermes_cli.gateway_chat import _requested_policy
 
-    def run_conversation(self, user_message, conversation_history=None, **_kwargs):
-        client = MagicMock()
-        client.base_url, client.api_key = "https://api.openai.com/v1", "fb-key"
-        with patch("agent.auxiliary_client.resolve_provider_client", return_value=(client, "fb-model")):
-            assert self._try_activate_fallback() is True
-        return {"final_response": f"{self.model}:{self.reasoning_config['effort']}"}
-
-
-@pytest.fixture
-def oneshot(monkeypatch):
-    import hermes_cli.oneshot as oneshot_mod
-    monkeypatch.setattr(oneshot_mod, "_create_session_db_for_oneshot", lambda: None)
-    monkeypatch.setattr("hermes_cli.config.load_config", lambda: _CFG)
-    monkeypatch.setattr("hermes_cli.runtime_provider.resolve_runtime_provider", lambda **_kw: {
-        "api_key": "k", "base_url": "https://openrouter.ai/api/v1", "provider": "openrouter",
-        "api_mode": "chat_completions", "credential_pool": None})
-    monkeypatch.setattr("hermes_cli.tools_config._get_platform_tools", lambda _cfg, _p: [])
-    monkeypatch.setattr("hermes_cli.mcp_startup.ensure_mcp_discovery_before_agent_build", lambda **_kw: None)
-    monkeypatch.setattr("run_agent.AIAgent", _FallsBackAgent)
-    monkeypatch.setattr("model_tools.get_tool_definitions", lambda *_a, **_k: [])
-    monkeypatch.setattr("model_tools.check_toolset_requirements", lambda *_a, **_k: {})
-    monkeypatch.setattr("agent.process_bootstrap.OpenAI", MagicMock())
-    return oneshot_mod._run_agent
+    seen = []
+    monkeypatch.setattr(sys, "argv", ["hermes", "-z", "ping", *flags])
+    monkeypatch.setattr(main_mod, "_prepare_agent_startup", lambda _args: None)
+    monkeypatch.setattr("hermes_cli.gateway_chat_startup.launch_gateway_chat",
+                        lambda args: seen.append(_requested_policy(args)) or 0)
+    with pytest.raises(SystemExit):
+        main_mod.main()
+    assert len(seen) == 1
+    return seen[0]
 
 
-def test_reasoning_flag_survives_fallback(oneshot):
-    assert oneshot("ping", reasoning="high")[0] == "fb-model:high"
+def _oneshot_turn(monkeypatch, tmp_path, *flags):
+    from gateway.config import Platform
+    from gateway.session import SessionSource
+    from gateway.session_policy import build_policy
+
+    params = _oneshot_create_params(monkeypatch, *flags)
+    # A local endpoint keeps the turn off the network, and ignore_user_config keeps it off the owner's
+    # prefill store, which needs a session authority. Neither touches the reasoning fields.
+    policy = build_policy({**params, "cwd": str(tmp_path), "model": "primary-model", "provider": "custom",
+                           "base_url": "http://127.0.0.1:1234/v1", "ignore_user_config": True}, _CFG)
+    monkeypatch.setattr("gateway.session_policy.policy_for_source", lambda _runner, _source: policy)
+    source = SessionSource(platform=Platform.LOCAL, chat_id="local-1", chat_type="dm", user_id="user-1")
+    return _turn(_runner(), source)["final_response"]
 
 
-def test_without_the_flag_fallback_resolves_the_fallback_models_config(oneshot):
-    assert oneshot("ping")[0] == "fb-model:low"
+def test_reasoning_flag_survives_fallback(gateway_home, tmp_path, monkeypatch):
+    assert _oneshot_turn(monkeypatch, tmp_path, "--reasoning", "high") == "fb-model:high"
 
 
-def test_an_unparsed_flag_is_not_the_runs_own_level(oneshot):
-    assert oneshot("ping", reasoning="bogus")[0] == "fb-model:low"
+def test_without_the_flag_fallback_resolves_the_fallback_models_config(gateway_home, tmp_path, monkeypatch):
+    assert _oneshot_turn(monkeypatch, tmp_path) == "fb-model:low"
+
+
+def test_an_unparsed_flag_is_refused_rather_than_run_as_the_sessions_level(tmp_path, monkeypatch):
+    """The gateway refuses an unknown level at creation, so no run carries it as its own."""
+    from gateway.session_policy import build_policy
+    from hermes_state_runtime import RuntimeStoreError
+
+    params = _oneshot_create_params(monkeypatch, "--reasoning", "bogus")
+    assert params["reasoning"] == "bogus"
+    with pytest.raises(RuntimeStoreError) as caught:
+        build_policy({**params, "cwd": str(tmp_path)}, _CFG)
+    assert (caught.value.field, caught.value.reason) == ("reasoning", "invalid_params")
