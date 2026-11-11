@@ -4,6 +4,7 @@ import threading
 import time
 from datetime import datetime, timezone, UTC
 
+import httpx
 import pytest
 
 from agent.account_usage import (
@@ -12,8 +13,10 @@ from agent.account_usage import (
     _fetch_portal_account,
     fetch_account_usage,
     render_account_usage_lines,
+    usage_failure_reason,
 )
 from agent.billing_usage import fetch_nous_account as _billing_fetch_nous_account
+from hermes_cli.auth import AuthError
 from providers.base import ProviderProfile
 
 
@@ -340,3 +343,31 @@ def test_fetch_portal_account_returns_value_and_keeps_caller_context(monkeypatch
     finally:
         marker.reset(token)
     assert seen == {"force_fresh": True, "marker": "profile-scope"}
+
+
+def _status_error(status_code):
+    request = httpx.Request("GET", "https://api.anthropic.com/api/oauth/usage?key=sk-secret")
+    return httpx.HTTPStatusError("boom", request=request, response=httpx.Response(status_code, request=request))
+
+
+def test_fetch_account_usage_reports_a_failed_fetch_and_still_fails_open(monkeypatch, caplog):
+    """A failed fetch still returns None for in-session callers, but the cause reaches ``on_error``
+    and the log, so ``hermes usage`` can tell it from a missing credential (#154150)."""
+    error = _status_error(401)
+    _register_profile(monkeypatch, _UsageProfile(error=error, name="plugin-broken"))
+    _register_profile(monkeypatch, ProviderProfile(name="plugin-silent"))
+    seen = []
+
+    with caplog.at_level("INFO", logger="agent.account_usage"):
+        assert fetch_account_usage("plugin-broken", on_error=seen.append) is None
+        assert fetch_account_usage("plugin-silent", on_error=seen.append) is None  # nothing fetched, nothing failed
+
+    assert seen == [error]
+    assert [r.getMessage() for r in caplog.records] == [
+        "account usage fetch failed for plugin-broken: HTTP 401 from api.anthropic.com"]
+
+
+def test_usage_failure_reason_names_the_cause_without_the_request():
+    assert usage_failure_reason(_status_error(429)) == "HTTP 429 from api.anthropic.com"
+    assert usage_failure_reason(httpx.ConnectError("https://x.test/?key=sk-secret refused")) == "ConnectError"
+    assert usage_failure_reason(AuthError("Codex session expired")) == "AuthError: Codex session expired"

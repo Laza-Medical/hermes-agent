@@ -37,19 +37,25 @@ def usage_snapshot_document(snapshot) -> dict:
 
 def cmd_usage(args: argparse.Namespace) -> int:
     """Print the configured (or ``--provider``) account's usage windows; exit 1 when nothing could be fetched."""
-    from agent.account_usage import fetch_account_usage, render_account_usage_lines
+    from agent.account_usage import fetch_account_usage, render_account_usage_lines, usage_failure_reason
+    from agent.account_usage_cache import has_account_usage
     from hermes_cli.runtime_provider import resolve_requested_provider
 
     provider = resolve_requested_provider(getattr(args, "provider", None))
     # No explicit key: the fetcher resolves the credential exactly as a session without a live agent
     # would (singleton store, then credential pool) — it never adopts or refreshes anything else.
-    snapshot = fetch_account_usage(provider)
+    failures: list[Exception] = []
+    snapshot = fetch_account_usage(provider, on_error=failures.append)
     if snapshot is None:
-        print(
-            f"No account usage available for provider '{provider}': no credential is configured for it, "
-            "the provider has no usage endpoint, or the fetch failed.",
-            file=sys.stderr,
-        )
+        # The kind in parentheses is for scripts: a failed fetch (expired login, rate limit, network)
+        # is worth a retry or a new login; the other two are not.
+        if failures:
+            kind, reason = "fetch_failed", usage_failure_reason(failures[0])
+        elif not has_account_usage(provider):
+            kind, reason = "no_usage_endpoint", "the provider has no usage endpoint"
+        else:
+            kind, reason = "no_credential", "no credential is configured for it, or it returned no usage"
+        print(f"No account usage available for provider '{provider}' ({kind}): {reason}", file=sys.stderr)
         return 1
     if getattr(args, "json", False):
         print(json.dumps(usage_snapshot_document(snapshot), indent=2))
