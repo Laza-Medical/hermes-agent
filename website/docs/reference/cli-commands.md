@@ -724,7 +724,16 @@ hermes usage --json                   # one JSON document on stdout
 Credentials resolve exactly as they do for `/usage` in a session with no live agent (the auth store, then
 the credential pool); the command never adds or refreshes a credential it would not use for chat. Exit code
 `0` on success; `1` with a single stderr line when no credential is configured for the provider, the provider
-has no usage endpoint, or the fetch fails (stdout stays empty).
+has no usage endpoint, or the fetch fails (stdout stays empty). The line names which one in parentheses, and
+a failed fetch gives its cause, so a script can tell an expired login from a provider that is not set up:
+
+```
+No account usage available for provider 'anthropic' (fetch_failed): HTTP 401 from api.anthropic.com
+No account usage available for provider 'anthropic' (no_credential): no credential is configured for it, or it returned no usage
+No account usage available for provider 'bedrock' (no_usage_endpoint): the provider has no usage endpoint
+```
+
+A failed fetch is also written to `agent.log`.
 
 `--json` schema (keys are stable; new keys may be added):
 

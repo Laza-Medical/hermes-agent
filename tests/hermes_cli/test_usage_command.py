@@ -61,4 +61,27 @@ def test_hermes_usage_without_credential_exits_nonzero_with_one_stderr_line(caps
     out, err = capsys.readouterr()
     assert out == ""
     assert err.count("\n") == 1 and "openai-codex" in err
+    assert "(no_credential)" in err
+
+
+def test_hermes_usage_names_a_failed_fetch_apart_from_a_missing_credential(capsys):
+    """#154150: an expired login (401), a rate limit and a network error used to read as "no credential"."""
+    import httpx
+
+    request = httpx.Request("GET", "https://api.anthropic.com/api/oauth/usage")
+    error = httpx.HTTPStatusError("boom", request=request, response=httpx.Response(401, request=request))
+
+    def fetch(provider, *, on_error=None, **kwargs):
+        on_error(error)
+
+    assert _run(["usage", "--json", "--provider", "anthropic"], fetch) == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert err == "No account usage available for provider 'anthropic' (fetch_failed): HTTP 401 from api.anthropic.com\n"
+
+
+def test_hermes_usage_names_a_provider_without_a_usage_endpoint(capsys):
+    assert _run(["usage", "--provider", "bedrock"], lambda provider, **kw: None) == 1
+    out, err = capsys.readouterr()
+    assert out == "" and err.count("\n") == 1 and "(no_usage_endpoint)" in err
 

@@ -988,10 +988,23 @@ def _call_plugin_usage_hook(profile, base_url: Optional[str], api_key: Optional[
     return None if bounded.timed_out else bounded.value
 
 
+def usage_failure_reason(exc: BaseException) -> str:
+    """One line naming why a usage fetch failed. An httpx message can hold the request URL, so only
+    the status and host (or the exception class) are kept; an ``AuthError`` message is Hermes's own."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code} from {exc.request.url.host}"
+    if isinstance(exc, AuthError):
+        return f"AuthError: {exc}"
+    return type(exc).__name__
+
+
 def fetch_account_usage(
     provider: Optional[str], *, base_url: Optional[str] = None, api_key: Optional[str] = None,
     read_only: bool = False, identity_id: Optional[str] = None,
+    on_error: Optional[Callable[[Exception], None]] = None,
 ) -> Optional[AccountUsageSnapshot]:
+    """Fail open: a failed fetch returns None like a missing credential, so a turn never breaks on
+    it. The cause is logged and handed to ``on_error`` for callers that must tell the two apart."""
     from agent.account_usage_cache import remember_account_usage
 
     slug = str(provider or "").strip().lower()
@@ -1011,7 +1024,10 @@ def fetch_account_usage(
 
             profile = get_provider_profile(slug)
             snapshot = _call_plugin_usage_hook(profile, base_url, api_key) if profile else None
-    except Exception:
+    except Exception as exc:
+        logger.info("account usage fetch failed for %s: %s", slug, usage_failure_reason(exc))
+        if on_error is not None:
+            on_error(exc)
         return None
     # Every fetch (``/usage``, the per-turn ``session.usage``) keeps the picker's cache current.
     # A per-credential fetch is remembered under its account slot only; the provider-wide fetch
