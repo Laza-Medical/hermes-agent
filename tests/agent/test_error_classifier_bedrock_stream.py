@@ -3,7 +3,8 @@ no HTTP status, the error code only in ``exc.response["Error"]["Code"]``. That c
 the classifier, or the turn ends after its retries instead of waiting on the outage ladder."""
 import pytest
 
-from agent.error_classifier import TRANSIENT_REASONS, FailoverReason, classify_api_error
+from agent.error_classifier import FailoverReason, classify_api_error
+from agent.turn_recovery_autorecover import _LADDER_REASONS as TRANSIENT_REASONS  # carry: upstream main names this TRANSIENT_REASONS in error_classifier
 from agent.turn_retry_state import TurnRetryState
 from tests.agent.test_turn_recovery_autorecover import _Agent, _settle
 
