@@ -311,7 +311,7 @@ class TestConvertMessagesToConverse:
         _, msgs = convert_messages_to_converse([
             {"role": "user", "content": "hi"},
             {"role": "tool", "tool_call_id": "t1", "content": content},
-        ])
+        ], model="global.anthropic.claude-fable-5-2")
         blocks = [b for turn in msgs for b in turn["content"] if "toolResult" in b]
         assert len(blocks) == 1
         return blocks[0]["toolResult"]["content"]

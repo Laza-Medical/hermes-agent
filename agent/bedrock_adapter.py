@@ -767,13 +767,21 @@ def _is_openai_content_part(part) -> bool:
     return isinstance(part, dict) and part.get("type") in {"text", "image_url"}
 
 
-def _tool_result_blocks(content) -> list[dict]:
+# Model families whose Converse ``toolResult`` accepts image blocks. Every other model (OpenAI GPT on
+# Bedrock answers ValidationException "doesn't support the image field") and an unknown or missing
+# model id, including an application-inference-profile ARN, keeps the text path.
+_TOOL_RESULT_IMAGE_PATTERNS = ["anthropic.", "amazon.nova"]
+
+
+def _tool_result_blocks(content, model: Optional[str] = None) -> list[dict]:
     """Tool-result content → Converse ``toolResult.content`` blocks.
 
     Multimodal tool results (computer-use screenshots, image tools, vision results) carry
     image parts, and Converse accepts image blocks here. Flattening them through
     ``json.dumps`` hides the image from the model AND inlines the raw base64 as text,
     pushing the request toward the size limit."""
+    if not any(pattern in (model or "").lower() for pattern in _TOOL_RESULT_IMAGE_PATTERNS):
+        return [{"text": _safe_text(content if isinstance(content, str) else json.dumps(content))}]
     # Dict first: vision_analyze's native fast path returns the envelope
     # {"_multimodal": True, "content": [...], "text_summary": ...} rather than a bare
     # list, and it is the most common producer of image-bearing tool results. Matching
@@ -1099,7 +1107,7 @@ def convert_messages_to_converse(
             system_blocks.extend(_system_blocks(content))
         elif role == "tool":
             append_turn("user", [{"toolResult": {
-                "toolUseId": msg.get("tool_call_id", ""), "content": _tool_result_blocks(content)}}])
+                "toolUseId": msg.get("tool_call_id", ""), "content": _tool_result_blocks(content, model)}}])
         elif role == "assistant":
             issuer = _issuer(msg) if model is not None else None
             own = issuer is not None and issuer == model
