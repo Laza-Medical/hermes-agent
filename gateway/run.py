@@ -1123,7 +1123,8 @@ def _build_replay_entry(
 ) -> dict[str, Any]:
     """Build a replay entry for a non-tool-calling message, preserving ``_ASSISTANT_REPLAY_FIELDS``.
 
-    ``preserve_timestamp``: only user rows need it (stale-dangerous-confirmation stripper). Falsy fields are
+    ``preserve_timestamp``: keep the row's stored time (stale-dangerous-confirmation stripper on user rows,
+    idle-compaction reference on every row). Falsy fields are
     dropped EXCEPT ``reasoning_content``: DeepSeek/Kimi treat "" as a sentinel; dropping it can 400.
 
     Empty values: most fields are dropped when falsy (matching the original PR #2974 behaviour) since an
@@ -1276,7 +1277,8 @@ def _build_gateway_agent_history(
 
         # Rich tool_calls/tool-result rows pass through intact so the API sees valid assistant→tool sequences.
         if "tool_calls" in msg or "tool_call_id" in msg or role == "tool":
-            clean_msg = {k: v for k, v in msg.items() if k not in {"timestamp", "observed"}}
+            # ``timestamp`` stays: idle compaction measures the pause from the newest prior row.
+            clean_msg = {k: v for k, v in msg.items() if k != "observed"}
             agent_history.append(clean_msg)
         elif content or _has_replayable_sidecar(role, content, msg):
             replay_timestamp = msg.get("timestamp")
@@ -1292,8 +1294,9 @@ def _build_gateway_agent_history(
                             replay_timestamp = embedded_timestamp
                 if not content:
                     continue
-            # Keep user timestamps for the stale-dangerous-confirmation stripper in agent/replay_cleanup.py.
-            entry = _build_replay_entry(role, content, msg, preserve_timestamp=(role == "user"))
+            # Keep timestamps: user rows feed the stale-dangerous-confirmation stripper in
+            # agent/replay_cleanup.py, and every row feeds the idle-compaction reference.
+            entry = _build_replay_entry(role, content, msg, preserve_timestamp=True)
             if inject_timestamps and role == "user" and isinstance(content, str) and not is_compaction_scaffolding(msg):
                 rendered = _render_msg_ts(content, replay_timestamp, tz=_msg_tz)
                 # Preserve only a sidecar matching the complete rendered message,

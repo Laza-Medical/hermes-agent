@@ -834,7 +834,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 history = list(history)
                 adopt_unanswered_turn(history, api['content'], agent)
             return history, None, _collect_history_media_paths(history)
-        # Transcript rows ({role, content, timestamp}) lose timestamps; interrupt-path agent messages
+        # Transcript rows ({role, content, timestamp}) keep their timestamps; interrupt-path agent messages
         # (tool_calls/tool_call_id/reasoning) pass through intact so the API sees valid assistant→tool
         # sequences. Telegram observed=True rows are withheld from replayable history and attached to
         # the current addressed message as API-only context.
@@ -910,7 +910,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         # Auto-continue: history ending with a tool result means the previous turn was cut off
         # (restart, crash, SIGTERM). Session-level resume_pending (drain-timeout shutdown) uses
         # stronger reason-aware wording that subsumes this case. Both gate on the age of
-        # ``history[-1]`` (not agent_history, which stripped tool-row timestamps); no stamp = fresh.
+        # ``history[-1]`` (the stored transcript, not the replay view); no stamp = fresh.
         window = _auto_continue_freshness_window()
         interruption_is_fresh = _is_fresh_gateway_interruption(_last_transcript_timestamp(ctx.history), window_secs=window)
         entry = None
