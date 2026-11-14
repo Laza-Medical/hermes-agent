@@ -80,6 +80,7 @@ _COMPRESSION_INT_KEYS = (
     ("proactive_prune_min_reclaim_tokens", 4096, 0),
     ("protect_last_n", 20, 0),
     ("min_tail_user_messages", 1, 1),
+    ("summary_tokens_ceiling", 10_000, 0),  # the compressor floors the budget itself
 )
 
 
@@ -118,6 +119,8 @@ def _apply_live_compression_config(agent: Any, cfg: dict | None) -> None:
     default_tail = str(_compressor_ctor_default("tail_mode", "lean"))
     mode = str(compression.get("tail_mode", default_tail) or default_tail).strip().lower()
     cc.tail_mode = mode if mode in ("legacy", "lean") else default_tail
+    cc.summary_session_log = is_truthy_value(
+        compression.get("summary_session_log"), default=bool(_compressor_ctor_default("summary_session_log", True)))
     for key, fallback, min_value in _COMPRESSION_INT_KEYS:
         default = int(_compressor_ctor_default(key, fallback))
         raw = compression.get(key, default)
@@ -168,7 +171,7 @@ def _apply_live_compression_config(agent: Any, cfg: dict | None) -> None:
         compression.get("threshold_tokens", _default_threshold_tokens_cap())
     )
     # Invalidate the cached trigger so the next preflight re-derives from percent/window, then the cap.
-    cc._threshold_tokens = cc._tail_token_budget = None
+    cc._threshold_tokens = cc._tail_token_budget = cc._max_summary_tokens = None
 
 
 def _sync_agent_compression_with_config(sid: str, session: dict) -> None:

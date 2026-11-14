@@ -160,6 +160,20 @@ class TestExtractCacheBustingConfig:
         assert sig({}) == sig({"compression": {"threshold_tokens": default_cap}}) == default_cap
         assert sig({"compression": {"threshold_tokens": other_cap}}) == other_cap != sig({})
 
+    @pytest.mark.parametrize(("key", "edited"), [("summary_tokens_ceiling", 4000), ("summary_session_log", False)])
+    def test_summary_length_edit_rebuilds_the_cached_agent(self, key, edited):
+        """A compressor reads the summary-length keys once, at agent build, so an edit must change the
+        cached agent's signature; absent and the explicit default build the same agent."""
+        from gateway.run import GatewayRunner
+
+        runtime = {"api_key": "k", "base_url": "u", "provider": "p"}
+        sig = lambda cfg: GatewayRunner._agent_config_signature(
+            "m", runtime, [], "", cache_keys=GatewayRunner._extract_cache_busting_config(cfg))
+        default = DEFAULT_CONFIG["compression"][key]
+        assert edited != default
+        assert sig({}) == sig({"compression": {key: default}})
+        assert sig({"compression": {key: edited}}) != sig({})
+
     def test_legacy_checkpoints_bool_carries_defaults_for_the_other_keys(self):
         """`checkpoints: true` builds the agent with DEFAULT_CONFIG's limits (`_checkpoint_agent_kwargs`), so
         migrating to `checkpoints: {enabled: true}` must not change the signature."""

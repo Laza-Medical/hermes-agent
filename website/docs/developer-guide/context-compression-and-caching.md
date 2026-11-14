@@ -316,6 +316,8 @@ auxiliary:
 | `model_thresholds` | `{}` | map | Per-model overrides of `threshold`. Keys are substring-matched against the model name (longest match wins); `"<provider>:<substring>"` keys apply only on that provider. The small-context floor still applies on top (see below) |
 | `target_ratio` | `0.20` | 0.10-0.80 | Controls tail protection token budget: `threshold_tokens × target_ratio` (legacy mode only — `lean` uses its own clamp) |
 | `tail_mode` | `lean` | `lean`, `legacy` | Tail retention policy. `legacy` keeps a `target_ratio`-sized verbatim tail (~100K+ tokens on big-window models). `lean` keeps a clamped tail of `2.5% × context window` (10K floor, 25K cap) and instead carries continuity in the summary: a detailed identifier-preserving session log (produced by the same single summary request — lean compaction makes exactly one auxiliary LLM call per attempt), a mechanically extracted anchor index (PR numbers, SHAs, paths, error strings — regex, never paraphrased), every real user message quoted verbatim (newest-first budget), and a `session_search` recovery pointer so the agent can re-access anything summarized away. Oversized regions are evenly sampled into the summarizer input (with explicit elision markers) rather than triggering extra calls. Result on 500K-token real sessions: ~49K retained vs ~162K, with higher recall when paired with recovery (see `evals/compaction/results/`). Old tool results inside the lean tail are demoted to one-line stubs carrying a recovery pointer |
+| `summary_tokens_ceiling` | `10000` | int (floor 2,000) | Ceiling of the summary's token target: `max(2,000, min(content × 0.20, context_length × 0.05, summary_tokens_ceiling))`. Lower it for shorter, faster summaries |
+| `summary_session_log` | `true` | bool | `lean` mode only: ask the summariser for the "Detailed Session Log" section, with 4,000 tokens added to the target. `false` drops the section and the allowance |
 | `protect_last_n` | `20` | ≥1 | Minimum number of recent messages always preserved |
 | `min_tail_user_messages` | `1` | ≥1 | Minimum number of REAL (actionable) user messages guaranteed to survive in the uncompressed tail. `1` = the existing single last-user anchor (behavior-preserving default). Raise to e.g. `3` to keep the last 3 real user turns verbatim even when bulky tool outputs fill the tail token budget. Blank platform echoes, compaction handoffs, and synthetic continuation rows never count toward N. The guarantee wins over the tail token budget — the tail may exceed the budget when the anchor pulls the cut back |
 | `protect_first_n` | `3` | (hardcoded) | System prompt + first exchange always preserved |
@@ -534,7 +536,7 @@ cannot preserve strict native first ordering.
 context_length       = 200,000
 threshold_tokens     = 200,000 × 0.50 = 100,000
 tail_token_budget    = 100,000 × 0.20 = 20,000
-max_summary_tokens   = min(200,000 × 0.05, 12,000) = 10,000
+max_summary_tokens   = min(200,000 × 0.05, 10,000) = 10,000   # 10,000 = compression.summary_tokens_ceiling
 ```
 
 :::note Threshold is derived from the MAIN model's context window
@@ -647,7 +649,8 @@ template:
 Summary budget scales with the amount of content being compressed:
 - Formula: `content_tokens × 0.20` (the `_SUMMARY_RATIO` constant)
 - Minimum: 2,000 tokens
-- Maximum: `min(context_length × 0.05, 12,000)` tokens
+- Maximum: `min(context_length × 0.05, compression.summary_tokens_ceiling)` tokens (ceiling default 10,000; a ceiling under 2,000 acts as 2,000)
+- In lean tail mode the prompt's target adds 4,000 tokens for the "Detailed Session Log" section, unless `compression.summary_session_log` is `false`, which drops the section and the allowance
 
 ### Phase 4: Assemble Compressed Messages
 

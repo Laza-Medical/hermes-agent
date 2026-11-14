@@ -585,6 +585,8 @@ DEFAULT_CONFIG = {
         # (~3x fewer retained tokens; a few extra summarizer calls at the boundary). "legacy" =
         # 0.20×threshold verbatim tail (100-240K tokens on big windows).
         "tail_mode": "lean",
+        "summary_tokens_ceiling": 10000,  # ceiling of the summary's token target; values under 2000 act as 2000
+        "summary_session_log": True,  # lean mode: ask for the "Detailed Session Log" section (+4,000-token target)
         # protect_last_n: minimum recent messages kept uncompressed, honoured up to a small count
         # floor; the verbatim tail is otherwise token-bounded and never above 20% of the window.
         "protect_last_n": 20,

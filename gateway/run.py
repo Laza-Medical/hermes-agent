@@ -4115,6 +4115,7 @@ class GatewayRunner(
         ("compression", "micro_compact_every_n_turns"),
         ("compression", "micro_compact_defrag_threshold_tokens"), ("compression", "target_ratio"),
         ("compression", "tail_mode"), ("compression", "protect_last_n"),
+        ("compression", "summary_tokens_ceiling"), ("compression", "summary_session_log"),
         ("compression", "proactive_prune_tokens"),
         ("compression", "proactive_prune_min_result_chars"),
         ("compression", "proactive_prune_min_reclaim_tokens"),

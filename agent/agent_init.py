@@ -1459,6 +1459,9 @@ def _parse_compression_config(agent, _agent_cfg) -> CompressionSettings:
         proactive_prune_min_reclaim=max(
             0, _parse_config_int(cfg.get("proactive_prune_min_reclaim_tokens", 4096), 4096)
         ),
+        # Summary length: ceiling of the summary token budget (floor 2,000), and the lean session-log section.
+        summary_tokens_ceiling=_parse_config_int(cfg.get("summary_tokens_ceiling", 10_000), 10_000),
+        summary_session_log=is_truthy_value(cfg.get("summary_session_log"), default=True),
         protect_first=protect_first,
         abort_on_summary_failure=_cfg_flag(cfg, "abort_on_summary_failure", False),
         # Per-model threshold overrides: keys substring-matched against the model name
@@ -1902,7 +1905,8 @@ def _build_context_engine(agent, _agent_cfg, cs, _custom_providers, _effective_c
             proactive_prune_min_result_chars=cs.proactive_prune_min_chars,
             proactive_prune_min_reclaim_tokens=cs.proactive_prune_min_reclaim,
             min_tail_user_messages=cs.min_tail_users, tail_mode=cs.tail_mode,
-            custom_providers=_custom_providers,
+            custom_providers=_custom_providers, summary_tokens_ceiling=cs.summary_tokens_ceiling,
+            summary_session_log=cs.summary_session_log,
         )
     _bind_session_state = getattr(agent.context_compressor, "bind_session_state", None)
     if callable(_bind_session_state):

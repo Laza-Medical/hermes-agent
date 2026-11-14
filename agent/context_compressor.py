@@ -825,8 +825,6 @@ def _next_timeout_cooldown(compressor: Any, counter: str = "_consecutive_timeout
 
 _MIN_SUMMARY_TOKENS = 2000
 _SUMMARY_RATIO = 0.20
-# Summaries above ~10K tokens are themselves a context-pressure source.
-_SUMMARY_TOKENS_CEILING = 10_000
 
 # After this many failures at one cursor, skip the exchange to avoid busy-looping.
 _MICRO_COMPACT_MAX_CONSECUTIVE_FAILURES = 3
@@ -2236,7 +2234,8 @@ class ContextCompressor(
     @property
     def max_summary_tokens(self) -> int:
         if self._max_summary_tokens is None:
-            self._max_summary_tokens = min(int(self.context_length * 0.05), _SUMMARY_TOKENS_CEILING)
+            _ceiling = max(_MIN_SUMMARY_TOKENS, getattr(self, "summary_tokens_ceiling", 10_000))  # compression.summary_tokens_ceiling
+            self._max_summary_tokens = min(int(self.context_length * 0.05), _ceiling)
         return self._max_summary_tokens
 
     @max_summary_tokens.setter
@@ -2691,7 +2690,7 @@ class ContextCompressor(
         # Reset to None so the property recomputes via the mode-aware path (not the legacy formula).
         self._tail_token_budget = None
         _ = self.tail_token_budget  # eager recompute, same timing as before
-        self.max_summary_tokens = min(int(context_length * 0.05), _SUMMARY_TOKENS_CEILING)
+        self._max_summary_tokens = None  # recomputed from the new window and compression.summary_tokens_ceiling
         # Old usage cannot price a new model. Clear it without arming the post-compaction
         # latch: the next response supplies usage or enables the usage-less fallback.
         self.last_prompt_tokens = self.last_completion_tokens = self.last_total_tokens = 0
@@ -2805,9 +2804,11 @@ class ContextCompressor(
         model_thresholds: dict[str, float] | None = None, threshold_tokens_cap: Any = None,
         proactive_prune_tokens: int = 0, proactive_prune_min_result_chars: int = 8000,
         proactive_prune_min_reclaim_tokens: int = 4096, min_tail_user_messages: int = 1, tail_mode: str = "lean",
-        custom_providers: list | None = None,
+        custom_providers: list | None = None, summary_tokens_ceiling: int = 10_000, summary_session_log: bool = True,
     ):
         self.model, self.base_url, self.api_key, self.provider, self.api_mode = model, base_url, api_key, provider, api_mode
+        # Summary length: ceiling of the budget (above ~10K a summary is itself context pressure); lean session-log section on/off.
+        self.summary_tokens_ceiling, self.summary_session_log = int(summary_tokens_ceiling), bool(summary_session_log)
         # "lean" = small clamped tail + verbatim-user summary section; "legacy" = 0.20*window tail.
         self.tail_mode = tail_mode if tail_mode in ("legacy", "lean") else "lean"
         # Per-model context_length overrides live in custom_providers; without them deferred
@@ -3963,8 +3964,8 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             "not preserve their values."
         )
         # Lean mode folds the session log into this SAME single request (one aux call).
-        _session_log_section = _LEAN_SESSION_LOG_SECTION if getattr(self, "tail_mode", "lean") == "lean" else ""
-        _template_sections = self._summary_template_sections(_section, summary_budget, _session_log_section)
+        _lean_log = getattr(self, "tail_mode", "lean") == "lean" and getattr(self, "summary_session_log", True)
+        _template_sections = self._summary_template_sections(_section, summary_budget, _LEAN_SESSION_LOG_SECTION if _lean_log else "")
         if self._previous_summary:
             # Iterative update. Bound the previous summary too: a rehydrated handoff can be huge.
             _bounded_previous_summary = self._bound_summary_input(self._previous_summary)
