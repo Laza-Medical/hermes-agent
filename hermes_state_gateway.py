@@ -174,6 +174,20 @@ def _optional_table_columns(conn) -> dict[str, set[str]]:
 _HANDOFF_FAIL_SQL = "UPDATE sessions SET handoff_state = 'failed', handoff_error = ? WHERE "
 
 
+def _billing_route_is_fallback(row, config, column):
+    """Recognize fallback accounting before the turn writer has stamped its route."""
+    billing = row.get("billing_provider")
+    from hermes_state import _BARE_BILLING_PROVIDERS
+    if not billing or billing in _BARE_BILLING_PROVIDERS or not column:
+        return False
+    if config.get("provider") and config["provider"] != billing:
+        return True
+    from hermes_cli.config_effective import load_user_config_effective
+    from hermes_cli.fallback_config import get_fallback_chain
+    return any((r["model"], r["provider"]) == (column, billing)
+               for r in get_fallback_chain(load_user_config_effective()))
+
+
 class SessionGatewayMixin:
     """Routing index, session peers/orphans, hygiene streaks, heartbeats, handoffs."""
 
@@ -863,20 +877,22 @@ class SessionGatewayMixin:
         ``gateway_runtime`` from before the stamp, and a confirmed Browser/API lock still naming it.
         ``billing_provider`` served the column model, so it never fills the provider of another."""
         row = session_meta or {}
-        raw = row.get("model_config")
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except (TypeError, ValueError):
-                raw = {}
-        config = raw if isinstance(raw, dict) else {}
+        from hermes_state_sessions import _parse_model_config
+        config = _parse_model_config(row.get("model_config"))
         column = str(row.get("model") or "").strip()
         picked = str(config.get("model") or "").strip()
         runtime, lock = config.get("gateway_runtime"), config.get("browser_model_lock")
+        if isinstance(runtime, dict) and runtime.get("fallback_active") is True:
+            # The turn writer recorded the serving route; only the top-level pick is durable.
+            if not picked:
+                return "", {}
+            return picked, {k: config[k] for k in ("provider", "base_url", "api_mode") if config.get(k)}
         if isinstance(runtime, dict) and runtime.get("provider"):
             model = str(runtime.get("model") or "").strip() or column or picked
         elif isinstance(lock, dict) and lock.get("confirmed") and str(lock.get("model") or "").strip() == column:
             model = column or picked
+        elif not picked and _billing_route_is_fallback(row, config, column):
+            return "", {}
         else:
             model = picked or column
         route_row = row if model == column else {**row, "billing_provider": None}
