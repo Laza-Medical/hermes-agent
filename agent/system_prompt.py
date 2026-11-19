@@ -573,15 +573,21 @@ def _guidance_parts(agent: Any) -> list[str]:
     from agent.oneshot_footprint import agent_is_oneshot
     if not agent_is_oneshot(agent):
         parts.append(STEER_CHANNEL_NOTE)
+    return parts + model_guidance_parts(agent, agent.model)
+
+
+def model_guidance_parts(agent: Any, model: str) -> list[str]:
+    """Sections shared by prompt construction and temporary fallback requests."""
+    parts: list[str] = []
     # agent.tool_use_enforcement / agent.execution_guidance: "auto" (default)
     # matches the hardcoded model lists; true/false force; a list gives custom
     # model-name substrings.  Execution guidance is an independent gate so
     # DeepSeek/Kimi/Qwen-class models get it even with enforcement off.
-    if _model_gate(agent._tool_use_enforcement, agent.model, TOOL_USE_ENFORCEMENT_MODELS):
+    if _model_gate(agent._tool_use_enforcement, model, TOOL_USE_ENFORCEMENT_MODELS):
         parts.append(TOOL_USE_ENFORCEMENT_GUIDANCE)
-        if any(g in (agent.model or "").lower() for g in ("gemini", "gemma")):
+        if any(g in (model or "").lower() for g in ("gemini", "gemma")):
             parts.append(GOOGLE_MODEL_OPERATIONAL_GUIDANCE)
-    if _model_gate(getattr(agent, "_execution_guidance", "auto"), agent.model, EXECUTION_GUIDANCE_MODELS):
+    if _model_gate(getattr(agent, "_execution_guidance", "auto"), model, EXECUTION_GUIDANCE_MODELS):
         from agent.prompt_builder import execution_guidance_text
         parts.append(execution_guidance_text(agent.valid_tool_names))
     return parts

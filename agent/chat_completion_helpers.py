@@ -1741,23 +1741,16 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     return msg
 
 
-def rewrite_prompt_model_identity(agent, model: str, provider: str) -> None:
-    """Rewrite the cached prompt's ``Model:``/``Provider:`` lines after a provider switch.
+def rewrite_prompt_model_identity(agent, model: str, provider: str, *, fallback_from=None) -> None:
+    """Rewrite only the last identity lines (earlier matches may be user content).
 
-    Not persisted: the stored row keeps the primary's labels so a restored primary replays a
-    byte-identical prompt (prefix cache intact). Only the LAST occurrence of each line is touched —
-    earlier matches may be user content (memory snapshots, context files)."""
+    The session row keeps the primary's prompt. Fallback guidance belongs to the in-memory
+    retry only, so a restore replays the original prefix (prefix cache intact)."""
+    from agent.fallback_guidance import routed_prompt
     sp = getattr(agent, "_cached_system_prompt", None)
     if not isinstance(sp, str) or not sp:
         return
-    for label, value in (("Model", model), ("Provider", provider)):
-        if not value:
-            continue
-        matches = list(re.finditer(rf"(?m)^{label}: .*$", sp))
-        if matches:
-            last = matches[-1]
-            sp = f"{sp[:last.start()]}{label}: {value}{sp[last.end():]}"
-    agent._cached_system_prompt = sp
+    agent._cached_system_prompt = routed_prompt(agent, sp, model, provider, fallback_from)
 
 
 def _fallback_entry_key(fb: dict) -> tuple[str, str, str]:
@@ -2082,7 +2075,7 @@ def try_activate_fallback(agent, reason: FailoverReason | None = None, reset_at=
                 continue
             old_model, old_provider = bound
             fb_model = agent.model  # normalized by the binder
-            rewrite_prompt_model_identity(agent, fb_model, fb_provider)
+            rewrite_prompt_model_identity(agent, fb_model, fb_provider, fallback_from=bound)
 
             notice = (
                 f"⚠️ Model fallback: {old_model} via {old_provider} unavailable "
