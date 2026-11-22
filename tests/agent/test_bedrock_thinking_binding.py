@@ -135,8 +135,9 @@ def _run(route, client, kwargs=None, model=ADAPTIVE):
     """Drive one production call site against ``client``; returns the request that was built."""
     with patch("agent.bedrock_adapter._get_bedrock_runtime_client", return_value=client):
         if route == "aux":
+            from agent.tool_history_as_text import tool_history_for_request
             call_converse("us-east-1", model, _history())
-            return build_converse_kwargs(model, _history())
+            return build_converse_kwargs(model, tool_history_for_request(_history(), False))
         kwargs = kwargs if kwargs is not None else _main_kwargs({"effort": "high"}, model=model)
         built = copy.deepcopy(_wire(kwargs))
         if route == "stream":

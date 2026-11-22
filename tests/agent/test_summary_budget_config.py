@@ -61,7 +61,7 @@ def _summary_prompt(compressor, turns=None, **kwargs) -> str:
     with patch("agent.context_compressor.call_llm", return_value=_llm_response()) as call:
         assert compressor._generate_summary(turns or _large_middle(), **kwargs) is not None
     assert call.call_count == 1
-    return call.call_args.kwargs["messages"][0]["content"]
+    return "\n".join(message["content"] for message in call.call_args.kwargs["messages"])
 
 
 def _target(prompt: str) -> int:
