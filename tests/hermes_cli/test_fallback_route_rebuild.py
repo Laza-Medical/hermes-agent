@@ -7,6 +7,8 @@ import pytest
 from hermes_cli.cli_model_switch_mixin import stored_session_route
 from tests.tui_gateway import test_fallback_route_rebuild as tui_shapes
 
+pytestmark = pytest.mark.usefixtures('authority_cwd_in_tmp')
+
 PRIMARY = tui_shapes.PRIMARY
 saved_route = tui_shapes.saved_route  # the shared fixture, registered in this module too
 

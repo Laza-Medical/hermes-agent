@@ -4,9 +4,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from persistence.conversation.usage import BillingRoute, TokenCounts, UsageDelta
+from tests.fixtures.storage_read import session_row
+
 from gateway.session_execution import GatewaySessionAgentMixin
 from gateway.run_turn_prepare import GatewayTurnPrepareMixin
 from tests.gateway.test_session_follow_profile_config import _owner
+
+pytestmark = pytest.mark.usefixtures('authority_cwd_in_tmp')
 
 PRIMARY = 'claude-fable-5-2'
 BEDROCK = 'global.anthropic.claude-fable-5-2'
@@ -36,8 +41,7 @@ async def cold_turn(monkeypatch, shape, resume=None):
             'request_id': '1', 'source': 'tui', 'cwd': str(home), 'toolsets': []}})
         assert 'result' in response, response
         sid = response['result']['session_id']
-        db = authority.db
-        from hermes_state_local import local_receipt
+        db = authority.persistence
         expected = PRIMARY
         if shape in ('pick', 'switch'):
             expected = 'claude-sonnet-5'
@@ -47,19 +51,21 @@ async def cold_turn(monkeypatch, shape, resume=None):
                 session_id=sid, operation='model', request_id='pick', payload={'model': expected, 'provider': 'anthropic'},
                 expected_revision=snap['result']['revision'], expected_generation=snap['result']['execution_generation'])))
             assert 'result' in result, result
-        original = local_receipt(db, sid)['policy']
+        original = db.bindings.receipt(sid).policy
         assert original['model'] == json.loads(original['config_json'])['model']['default'] == expected
-        db.update_token_counts(sid, input_tokens=5, model=BEDROCK, billing_provider='bedrock', api_call_count=1)
+        db.usage.queue_usage(sid, UsageDelta(tokens=TokenCounts(input_tokens=5), api_call_count=1,
+                                            route=BillingRoute(model=BEDROCK, billing_provider='bedrock')))
+        assert db.usage.flush_usage()
         serving = SimpleNamespace(model=BEDROCK, provider='bedrock', _fallback_activated=True,
                                   api_mode='anthropic_messages', base_url='https://bedrock-runtime.us-east-1.amazonaws.com')
-        runner._session_db = SimpleNamespace(_db=db)
+        runner.persistence = db
         if shape != 'billing-only':
-            db.patch_session_model_config(sid, {'provider': 'anthropic'})
+            db.sessions.patch_model_config(sid, {'provider': 'anthropic'})
         if shape == 'switch':
             serving = SimpleNamespace(model=expected, provider='anthropic', _fallback_activated=False)
         if shape in ('nested', 'pick', 'switch'):
             GatewayTurnPrepareMixin._sync_session_model_from_agent(runner, sid, serving)
-        row = db.get_session(sid)
+        row = session_row(db, sid)
         assert row['model'] == (expected if shape == 'switch' else BEDROCK)
         if shape == 'nested':
             assert json.loads(row['model_config'])['gateway_runtime']['fallback_active'] is True
@@ -78,7 +84,7 @@ async def cold_turn(monkeypatch, shape, resume=None):
             runner._resolve_session_agent_runtime = GatewayTurnPrepareMixin._resolve_session_agent_runtime.__get__(runner)
             await resume(owner, sid, row)
         restore_local_session(authority, sid)
-        restored = local_receipt(db, sid)['policy']
+        restored = db.bindings.receipt(sid).policy
         if not resume:
             assert restored == original
         ctx.source = source = authority.sessions[sid].source

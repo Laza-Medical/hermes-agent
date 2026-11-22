@@ -6,11 +6,22 @@ import pytest
 
 from gateway.run_turn_prepare import GatewayTurnPrepareMixin
 from hermes_constants import get_hermes_home
-from hermes_state import SessionDB
+from persistence.conversation.usage import BillingRoute, TokenCounts, UsageDelta
+from tests.fixtures.storage_read import session_row
+from persistence_assembly import open_persistence, profile_scope
+from tests.fixtures.storage_seed import seed_session
+
+pytestmark = pytest.mark.usefixtures('authority_cwd_in_tmp')
 
 PRIMARY = ('claude-fable-5-2', 'anthropic')
 FALLBACK = ('global.anthropic.claude-fable-5-2', 'bedrock')
 PICK = ('claude-sonnet-5', 'anthropic')
+
+
+def account_fallback(db):
+    db.usage.queue_usage('chat', UsageDelta(tokens=TokenCounts(input_tokens=4), api_call_count=1,
+                                            route=BillingRoute(model=FALLBACK[0], billing_provider=FALLBACK[1])))
+    assert db.usage.flush_usage()
 
 
 @pytest.fixture(params=['nested', 'provider-only', 'billing-only', 'pick', 'switch'])
@@ -19,19 +30,19 @@ def saved_route(request):
     home.mkdir(parents=True, exist_ok=True)
     (home / 'config.yaml').write_text(json.dumps({'model': {'default': PRIMARY[0], 'provider': PRIMARY[1]},
         'fallback_providers': [{'model': FALLBACK[0], 'provider': FALLBACK[1]}]}))
-    db = SessionDB(db_path=home / 'state.db')
+    db = open_persistence(profile_scope(home=home))
     shape = request.param
     config = {} if shape == 'billing-only' else {'provider': PRIMARY[1]}
     if shape == 'pick':
         config['model'] = PICK[0]
-    db.create_session('chat', source='tui', model=PRIMARY[0], model_config=config)
-    db.update_token_counts('chat', input_tokens=4, model=FALLBACK[0], billing_provider=FALLBACK[1], api_call_count=1)
+    seed_session(db, 'chat', source='tui', model=PRIMARY[0], model_config=config)
+    account_fallback(db)
     if shape in ('nested', 'pick', 'switch'):
         serving = SimpleNamespace(model=FALLBACK[0], provider=FALLBACK[1], _fallback_activated=shape != 'switch')
-        GatewayTurnPrepareMixin._sync_session_model_from_agent(SimpleNamespace(_session_db=SimpleNamespace(_db=db)),
+        GatewayTurnPrepareMixin._sync_session_model_from_agent(SimpleNamespace(persistence=db),
                                                               'chat', serving)
     try:
-        yield db.get_session('chat'), {'pick': PICK, 'switch': FALLBACK}.get(shape, PRIMARY)
+        yield session_row(db, 'chat'), {'pick': PICK, 'switch': FALLBACK}.get(shape, PRIMARY)
     finally:
         db.close()
 
@@ -60,12 +71,12 @@ def test_tui_resume_primary_when_chain_no_longer_lists_the_fallback():
     home = get_hermes_home()
     home.mkdir(parents=True, exist_ok=True)
     (home / 'config.yaml').write_text(json.dumps({'model': {'default': PRIMARY[0], 'provider': PRIMARY[1]}}))
-    db = SessionDB(db_path=home / 'state.db')
+    db = open_persistence(profile_scope(home=home))
     try:
-        db.create_session('chat', source='tui', model=PRIMARY[0], model_config={'provider': PRIMARY[1]})
-        db.update_token_counts('chat', input_tokens=4, model=FALLBACK[0], billing_provider=FALLBACK[1], api_call_count=1)
+        seed_session(db, 'chat', source='tui', model=PRIMARY[0], model_config={'provider': PRIMARY[1]})
+        account_fallback(db)
         from tui_gateway.server import _stored_session_runtime_overrides
-        override = _stored_session_runtime_overrides(db.get_session('chat')).get('model_override') or {}
+        override = _stored_session_runtime_overrides(session_row(db, 'chat')).get('model_override') or {}
         assert (override.get('model', PRIMARY[0]), override.get('provider', PRIMARY[1])) == PRIMARY
     finally:
         db.close()
