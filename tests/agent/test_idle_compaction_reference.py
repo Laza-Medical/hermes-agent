@@ -18,7 +18,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from hermes_state import SessionDB
+from tests.fixtures.storage_seed import seed_session
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
 
 from agent.turn_context_compaction import idle_reference_timestamp
 from tests.agent.test_idle_compaction_lock_and_guards import _prep_idle_agent, _run_prologue
@@ -60,8 +61,8 @@ class TestIdleReferenceTimestamp:
 
 
 def _fresh(tmp_path: Path, sid: str, *, idle_after: int = 300):
-    db = SessionDB(db_path=tmp_path / "state.db")
-    db.create_session(sid, source="cli")
+    db = storage_handle(tmp_path)
+    seed_session(db, sid, "cli")
     agent = _prep_idle_agent(db, sid, idle_after=idle_after)
     agent.context_compressor.emit_automatic_compaction_status = False
     return agent

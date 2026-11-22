@@ -68,9 +68,8 @@ def _unseen(task_id, chat_id):
 
 
 def _wakes(authority, session_id):
-    from hermes_state_runtime import list_session_admissions
-    return [row for row in list_session_admissions(authority.db, session_id=session_id, pending_only=False)
-            if row['principal_id'].startswith('automation:')]
+    return [row for row in authority.persistence.admissions.list(session_id=session_id, pending_only=False)
+            if row.principal_id.startswith('automation:')]
 
 
 async def _assert_wakes(runner, authority, ref, task_id):
@@ -80,8 +79,8 @@ async def _assert_wakes(runner, authority, ref, task_id):
     assert await _tick(runner, failures), 'the notifier must claim the completed event'
     assert not _unseen(task_id, live.source.chat_id), 'the wake was not accepted: the claim was rewound'
     [wake] = _wakes(authority, ref.session_id)
-    assert wake['status'] == 'queued' and 'local_automation_v1' in wake['payload'], wake
-    assert task_id in wake['payload']['text'], wake
+    assert wake.status == 'queued' and 'local_automation_v1' in wake.payload, wake
+    assert task_id in wake.payload['text'], wake
     assert failures == {}
     # A second tick finds nothing left to deliver: the cursor advanced once, no duplicate wake.
     assert not await _tick(runner, failures)
@@ -101,15 +100,12 @@ async def test_kanban_wake_reaches_a_local_session(tmp_path, monkeypatch):
     from gateway.session_authority import SessionAuthority, initialize_session_authority
     from gateway.session_contract import SessionActor
     from gateway.session_local import LocalSessionAdapter, create_local_session
-    from hermes_state import AsyncSessionDB, SessionDB
 
     root = _hermes_root(tmp_path, monkeypatch)
     monkeypatch.setattr(SessionAuthority, '_schedule', lambda self, ref: None)  # drained by hand below
     runner = GatewayRunner(GatewayConfig(sessions_dir=root / 'sessions'))
-    db = SessionDB(root / 'state.db')
-    runner.session_store._db = db
-    runner._session_db = AsyncSessionDB(db)
-    authority = await initialize_session_authority(runner, profile_id='default', instance_id='owner', db=db)
+    db = runner.session_store.persistence
+    authority = await initialize_session_authority(runner, profile_id='default', instance_id='owner', persistence=db)
     try:
         actor = SessionActor('uid:501', 'default', frozenset({'session:create', 'session:submit', 'session:read'}),
                              'fixture')
@@ -126,7 +122,6 @@ async def test_kanban_wake_reaches_a_local_session(tmp_path, monkeypatch):
 async def test_kanban_wake_reaches_a_served_profiles_local_session(tmp_path, monkeypatch):
     """The same card from a served secondary's Desktop session (``multiplex_profiles``): its adapter
     lives in ``runner._profile_adapters[name]`` and its wake commits to that profile's authority."""
-    import hermes_state
     from gateway import run
     from gateway.run_runtime import initialize_gateway_runtime
     from gateway.runtime_ownership import process_ownership
@@ -136,7 +131,6 @@ async def test_kanban_wake_reaches_a_served_profiles_local_session(tmp_path, mon
     from gateway.session_local import LocalSessionAdapter, create_local_session
 
     root = _hermes_root(tmp_path, monkeypatch)
-    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
     monkeypatch.setattr(run, '_load_gateway_config', lambda *a: {'platform_toolsets': {'cli': [], 'tui': []}})
     monkeypatch.setattr(SessionAuthority, '_schedule', lambda self, ref: None)  # drained by hand below
     home = root / 'profiles' / 'beta'
@@ -165,6 +159,6 @@ async def test_kanban_wake_reaches_a_served_profiles_local_session(tmp_path, mon
         if connection is not None:
             await connection.close()
         for authority in list(getattr(runner, 'session_authorities', []) or []):
-            authority.db.close()
+            authority.persistence.close()
         for _, h in homes:
             process_ownership.release(h)

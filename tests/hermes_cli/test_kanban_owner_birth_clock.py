@@ -17,7 +17,8 @@ btime five seconds later in this process only, past the 2 s tolerance of
 import asyncio
 from contextlib import closing
 import json
-import sqlite3
+from tests.fixtures.storage_seed import seed_session, seed_admission
+from tests.gateway.fixtures.storage_handles import storage_handle, close_storage_handles
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -58,8 +59,8 @@ def _admit_this_process(tmp_path, monkeypatch):
 
     async def resume(ref, params):
         pass
-    db = SimpleNamespace(get_session=lambda sid: None, db_path=str(tmp_path / 'state.db'))
-    authority = SimpleNamespace(profile_id=str(tmp_path), db=db, submit=submit)
+    db = storage_handle(tmp_path)
+    authority = SimpleNamespace(profile_id=str(tmp_path), persistence=db, submit=submit)
     actor = SessionActor('owner', str(tmp_path), frozenset({'session:create'}), 'transport')
     connection = SimpleNamespace(authority=authority, actor=actor, native_owner=True, resume=resume)
     asyncio.run(run_task(connection, dict(board='owned', task_id=task_id, run_id=task.current_run_id,
@@ -68,10 +69,8 @@ def _admit_this_process(tmp_path, monkeypatch):
         receipt = json.loads(conn.execute(
             "SELECT payload FROM task_events WHERE task_id=? AND kind='owner_admitted'", (task_id,)).fetchone()[0])
     # The owner's turn is in flight: its admission is started, neither queued nor terminal.
-    with closing(sqlite3.connect(tmp_path / 'state.db')) as store, store:
-        store.execute('CREATE TABLE session_admissions (target_session_id TEXT, request_id TEXT, status TEXT, outcome TEXT)')
-        store.execute("INSERT INTO session_admissions VALUES (?, ?, 'started', NULL)",
-                      (receipt['session_id'], receipt['request_id']))
+    seed_session(db, receipt['session_id'], 'kanban')
+    seed_admission(db, receipt['session_id'], receipt['request_id'], 'started')
     return (lambda: connect(board='owned')), task_id, receipt
 
 

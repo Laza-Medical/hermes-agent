@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent.route_binding import notify_route_change
+from tests.fixtures.storage_seed import seed_session
 from gateway import local_viewer_events
 from gateway.config import GatewayConfig, Platform
 from gateway.run_turn_runner import TurnRunner
@@ -36,15 +37,15 @@ async def _serving(tmp_path, monkeypatch, running, cached):
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     monkeypatch.setattr(local_viewer_events, '_config_default_launch', lambda: False)
     store = SessionStore(tmp_path / 'sessions', GatewayConfig())
-    runner = SimpleNamespace(_session_db=store._db, session_store=store, _draining=False, config=None,
+    runner = SimpleNamespace(persistence=store.persistence, session_store=store, _draining=False, config=None,
                              _adapter_for_source=lambda source: None,
                              _running_agents={'route-s': running} if running is not None else {},
                              _cached_agent_for=lambda key: cached if key == 'route-s' else None)
     # The production lookup: the running agent first, else the cached one.
     runner._resident_agent_for = types.MethodType(GatewaySlashCommandsMixin._resident_agent_for, runner)
     authority = await initialize_session_authority(runner, profile_id='p', instance_id='owner')
-    store._db.create_session('s', source='telegram', model=PRIMARY[0])
-    assert authority.db.get_session('s')['model'] == PRIMARY[0]
+    seed_session(authority.persistence, 's', 'telegram', model=PRIMARY[0])
+    assert authority.persistence.sessions.get('s').model == PRIMARY[0]
     source = SessionSource(platform=Platform.TELEGRAM, chat_id='c')
     live = authority.sessions['s'] = LiveSession(source, 'route-s')
     authority.executing['s'] = 1

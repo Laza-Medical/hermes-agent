@@ -16,7 +16,10 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from hermes_state import SessionDB
+from persistence.conversation.messages import ConversationRequest, NewMessage
+from tests.fixtures.storage_read import conversation
+from tests.fixtures.storage_seed import seed_session
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
 
 from tests.agent.test_idle_compaction_lock_and_guards import _prep_idle_agent, _run_prologue
 
@@ -24,35 +27,34 @@ IDLE_AFTER = 3600
 
 
 def _agent(tmp_path: Path, sid: str):
-    db = SessionDB(db_path=tmp_path / "state.db")
-    db.create_session(sid, source="cli")
+    db = storage_handle(tmp_path)
+    seed_session(db, sid, "cli")
     agent = _prep_idle_agent(db, sid, idle_after=IDLE_AFTER)
     agent.context_compressor.emit_automatic_compaction_status = False
     return db, agent
 
 
-def _store_long_turn(db: SessionDB, sid: str, *, turn_started_ago: float, turn_ended_ago: float) -> None:
+def _store_long_turn(db, sid: str, *, turn_started_ago: float, turn_ended_ago: float) -> None:
     """Older small talk, then one long turn: the user asked ``turn_started_ago`` seconds ago and
     the assistant's last row landed ``turn_ended_ago`` seconds ago."""
     now = time.time()
     for i in range(8):
-        db.append_message(sid, "user" if i % 2 == 0 else "assistant", f"old{i}",
-                          timestamp=now - turn_started_ago - 600 + i)
-    db.append_message(sid, "user", "please do the long job", timestamp=now - turn_started_ago)
-    db.append_message(
-        sid, "assistant", "",
+        db.messages.append(sid, NewMessage( "user" if i % 2 == 0 else "assistant", f"old{i}",
+                          timestamp=now - turn_started_ago - 600 + i))
+    db.messages.append(sid, NewMessage( "user", "please do the long job", timestamp=now - turn_started_ago))
+    db.messages.append(sid, NewMessage( "assistant", "",
         tool_calls=[{"id": "call_1", "type": "function",
                      "function": {"name": "terminal", "arguments": "{}"}}],
-        timestamp=now - turn_started_ago + 5)
-    db.append_message(sid, "tool", "job output", tool_call_id="call_1", tool_name="terminal",
-                      timestamp=now - turn_ended_ago - 5)
-    db.append_message(sid, "assistant", "the long job is done", timestamp=now - turn_ended_ago)
+        timestamp=now - turn_started_ago + 5))
+    db.messages.append(sid, NewMessage( "tool", "job output", tool_call_id="call_1", tool_name="terminal",
+                      timestamp=now - turn_ended_ago - 5))
+    db.messages.append(sid, NewMessage( "assistant", "the long job is done", timestamp=now - turn_ended_ago))
 
 
-def _gateway_history(db: SessionDB, sid: str) -> list:
+def _gateway_history(db, sid: str) -> list:
     from gateway.run import _build_gateway_agent_history
 
-    stored = db.get_messages_as_conversation(sid, repair_alternation=True)
+    stored = conversation(db, sid, ConversationRequest(repair_alternation=True))
     history, _observed = _build_gateway_agent_history(stored)
     return history
 
@@ -60,7 +62,7 @@ def _gateway_history(db: SessionDB, sid: str) -> list:
 def test_gateway_history_keeps_the_stored_timestamp_on_every_row(tmp_path: Path) -> None:
     db, _unused = _agent(tmp_path, "GW_SHAPE")
     _store_long_turn(db, "GW_SHAPE", turn_started_ago=4000, turn_ended_ago=60)
-    stored = db.get_messages_as_conversation("GW_SHAPE", repair_alternation=True)
+    stored = conversation(db, "GW_SHAPE", ConversationRequest(repair_alternation=True))
 
     history = _gateway_history(db, "GW_SHAPE")
 

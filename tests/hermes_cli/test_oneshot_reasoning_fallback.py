@@ -61,10 +61,10 @@ def test_without_the_flag_fallback_resolves_the_fallback_models_config(gateway_h
 def test_an_unparsed_flag_is_refused_rather_than_run_as_the_sessions_level(tmp_path, monkeypatch):
     """The gateway refuses an unknown level at creation, so no run carries it as its own."""
     from gateway.session_policy import build_policy
-    from hermes_state_runtime import RuntimeStoreError
+    from persistence.core.errors import AuthorityRefusal
 
     params = _oneshot_create_params(monkeypatch, "--reasoning", "bogus")
     assert params["reasoning"] == "bogus"
-    with pytest.raises(RuntimeStoreError) as caught:
+    with pytest.raises(AuthorityRefusal) as caught:
         build_policy({**params, "cwd": str(tmp_path)}, _CFG)
     assert (caught.value.field, caught.value.reason) == ("reasoning", "invalid_params")

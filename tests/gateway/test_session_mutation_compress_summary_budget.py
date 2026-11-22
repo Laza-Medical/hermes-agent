@@ -14,7 +14,8 @@ from agent.context_compressor import _LEAN_SESSION_LOG_BUDGET_TOKENS, _LEAN_SESS
 from gateway.session_authority import SessionAuthority
 from gateway.session_controls import AuthorityConnection
 from gateway.session_local import create_local_session
-import hermes_state_runtime as rt
+from tests.fixtures.storage_read import session_row
+from tests.fixtures.storage_seed import seed_messages
 
 SUMMARY_BODY = (
     "## Historical Task Snapshot\nUser asked: 'question 0'\n\n"
@@ -36,20 +37,20 @@ async def _compress_prompt(tmp_path, monkeypatch, compression):
     call_llm = MagicMock(return_value=response)
     monkeypatch.setattr(context_compressor, 'call_llm', call_llm)
     store = SessionStore(tmp_path / 'sessions', GatewayConfig())
-    db = store._db
-    epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+    db = store.persistence
+    epoch = db.runtime.begin_epoch( instance_id='owner')
     runner = SimpleNamespace(session_store=store, _session_db=db, adapters={}, _draining=False,
                              _evict_cached_agent=lambda route: None, _cached_agent_for=lambda route: None,
                              _resolve_session_agent_runtime=lambda **k: ('frozen', {}))
-    authority = SessionAuthority(runner, profile_id=str(tmp_path), instance_id='owner', db=db, epoch=epoch)
+    authority = SessionAuthority(runner, profile_id=str(tmp_path), instance_id='owner', persistence=db, epoch=epoch)
     owner = AuthorityConnection(authority, object(), {'user_id': 'human'})
     ref = create_local_session(authority, owner.actor, dict(request_id='budget', source='cli', cwd=str(tmp_path),
                                                               model='frozen', toolsets=[]))
     # About 100K tokens of history: 20% of it is above the default 10,000 ceiling.
     for i in range(50):
-        db.append_message(ref.session_id, 'user', f'question {i}')
-        db.append_message(ref.session_id, 'assistant', f'answer {i}: ' + ('detail ' * 1200))
-    before = db.get_session(ref.session_id)
+        seed_messages(db, ref.session_id, {'role': 'user', 'content': f'question {i}'})
+        seed_messages(db, ref.session_id, {'role': 'assistant', 'content': f'answer {i}: ' + ('detail ' * 1200)})
+    before = session_row(db, ref.session_id)
     try:
         reply = await owner.dispatch({'id': 1, 'method': 'session.mutate', 'params': {
             'session_id': ref.session_id, 'request_id': 'compress', 'expected_revision': before['runtime_revision'],
