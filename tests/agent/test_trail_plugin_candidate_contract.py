@@ -121,6 +121,19 @@ def _resolve_logical_session_id(agent: Any, session_id: str) -> str:
     """
     if not session_id:
         return ""
+    try:
+        from persistence_assembly import open_persistence_reader
+    except ImportError:  # Older Hermes has no public reader.
+        pass
+    else:
+        try:
+            with open_persistence_reader(get_hermes_home()) as reader:
+                lineage = reader.lineage.lineage(session_id)
+            if lineage:
+                return str(lineage[0])
+        except Exception:
+            pass  # Best effort, including missing stores and client-owned sessions.
+    # Older Hermes agents expose compression lineage only on the session DB.
     db = getattr(agent, "_session_db", None) if agent else None
     if db is not None and hasattr(db, "get_compression_lineage"):
         try:
