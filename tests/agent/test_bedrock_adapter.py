@@ -1857,7 +1857,12 @@ class TestReasoningReplaySchema:
             return _ok_converse_response()
         client.converse.side_effect = converse
         with patch("agent.bedrock_adapter._get_bedrock_runtime_client", return_value=client):
-            response = call_converse(region="us-east-1", model="global.moonshotai.kimi-k3", messages=_kimi_turn_history())
+            response = call_converse(
+                region="us-east-1", model="global.moonshotai.kimi-k3", messages=_kimi_turn_history(),
+                tools=[{"type": "function", "function": {
+                    "name": "read_file", "description": "Read a file", "parameters": {"type": "object"},
+                }}],
+            )
         assert response.choices[0].message.content == "done"
         replayed = client.converse.call_args.kwargs["messages"][1]["content"]
         assert replayed[0] == {"reasoningContent": {"reasoningText": {"text": "let me think", "signature": "sig-1"}}}

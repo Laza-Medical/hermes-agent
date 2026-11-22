@@ -6,6 +6,29 @@ from types import ModuleType
 import pytest
 
 
+def test_tool_free_converse_replays_reasoning_without_native_tools(monkeypatch):
+    from unittest.mock import Mock
+
+    session = pytest.importorskip("botocore.session")
+    from botocore.validate import validate_parameters
+    from agent import bedrock_adapter
+    from tests.agent.test_bedrock_adapter import _kimi_turn_history, _ok_converse_response
+
+    client = Mock()
+    client.converse.return_value = _ok_converse_response()
+    monkeypatch.setattr(bedrock_adapter, "_get_bedrock_runtime_client", Mock(return_value=client))
+    bedrock_adapter.call_converse(region="us-east-1", model="global.moonshotai.kimi-k3", messages=_kimi_turn_history())
+    request = client.converse.call_args.kwargs
+    shape = session.get_session().get_service_model("bedrock-runtime").operation_model("Converse").input_shape
+    validate_parameters(request, shape)
+    assert "toolConfig" not in request
+    blocks = [block for message in request["messages"] for block in message["content"]]
+    assert not any("toolUse" in block or "toolResult" in block for block in blocks)
+    assert [b["reasoningContent"] for b in blocks if "reasoningContent" in b] == [
+        {"reasoningText": {"text": "let me think", "signature": "sig-1"}}, {"redactedContent": b"sealed"},
+    ]
+
+
 class _FakeAgent:
     verbose_logging = False
     reasoning_callback = None
