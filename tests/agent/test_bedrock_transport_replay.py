@@ -207,11 +207,13 @@ def test_live_duplicate_terminal_call_through_turn_order(replay, tmp_path):
     from agent.agent_init import _CALLBACK_PARAMS
     from agent.bedrock_adapter import convert_messages_to_converse, normalize_converse_stream_events
     from agent.message_sanitization import normalize_provider_tool_call_ids
-    from agent.session_persistence import _db_flush_row
+    from agent.session_persistence import _db_flush_row, _new_message
     from agent.tool_call_batches import expand_local_tool_batches
     from agent.transports.bedrock import BedrockTransport
     from agent.turn_tool_round import stage_tool_call_message
-    from hermes_state import SessionDB
+    from persistence_assembly import open_persistence, profile_scope
+    from tests.fixtures.storage_read import conversation
+    from tests.fixtures.storage_seed import seed_session
     from run_agent import AIAgent
 
     agent = AIAgent.__new__(AIAgent)
@@ -237,13 +239,12 @@ def test_live_duplicate_terminal_call_through_turn_order(replay, tmp_path):
     messages += [staged, {"role": "tool", "tool_call_id": "tooluse_kept", "content": "ok"}]
 
     if replay == "reloaded":
-        db = SessionDB(db_path=tmp_path / "state.db")
-        try:
-            db.create_session("s1", source="cli")
-            db.append_messages_batch("s1", [_db_flush_row(agent, m, False) for m in messages])
-            messages = db.get_messages_as_conversation("s1")
-        finally:
-            db.close()
+        scope = profile_scope(home=tmp_path)
+        with open_persistence(scope) as db:
+            seed_session(db, "s1", "cli")
+            db.messages.append_batch("s1", [_new_message(_db_flush_row(agent, m, False)) for m in messages])
+        with open_persistence(scope) as db:
+            messages = conversation(db, "s1")
         assert "bedrock_content_blocks" not in messages[1]
 
     _system, converse = convert_messages_to_converse(AIAgent._sanitize_api_messages(messages), model=agent.model)
