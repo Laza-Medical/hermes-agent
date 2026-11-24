@@ -204,6 +204,18 @@ def remember_rejected_thinking(agent: Any, api_messages: Any) -> int:
     return sum(strip_rejected_thinking(message, rejected) for message in api_messages)
 
 
+def inherit_rejected_thinking(fork: Any, parent: Any) -> None:
+    """A same-route fork replays the parent's history with no session store to restore from, so it
+    starts from a copy of the parent's fingerprints; the fork's own rejections never reach the parent."""
+    if not tracks_rejected_thinking(parent):
+        return
+    from agent.agent_init_session import agent_interface
+    session_id = getattr(parent, "session_id", None)
+    rejected = session_rejected_thinking(parent, getattr(parent, "_session_db", None), session_id,
+                                         persistence=agent_interface(parent))
+    fork._anthropic_rejected_thinking = (session_id, set(rejected))
+
+
 def carry_rejected_thinking_to_session(agent: Any, old_session_id: str) -> None:
     """Compression publishes the child with the session's initial model_config while its retained
     tail still holds the rejected canonical rows; carry the fingerprints onto ``agent.session_id``."""

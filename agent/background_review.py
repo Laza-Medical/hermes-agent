@@ -18,6 +18,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
+from agent.anthropic_thinking_replay import inherit_rejected_thinking
 from agent.i18n import t
 from agent.prompt_cache_scope import conversation_id, resolve_prompt_cache_scope_safe
 from agent.thread_scoped_output import thread_scoped_silence
@@ -1128,6 +1129,9 @@ def build_cache_parity_fork(
     if not _routed:
         review_agent._cached_system_prompt = agent._cached_system_prompt
         review_agent.session_start = agent.session_start
+        # Else the fork's first request resends blocks the provider already rejected for the parent: a
+        # 400, then a retry that strips them and rewrites the prefix the parent warmed.
+        inherit_rejected_thinking(review_agent, agent)
         # Cache-scope parity (#109964): the fork shares the parent's physical session_id and
         # byte-identical prefix, but is _persist_disabled (declared scope fails closed) and
         # _session_db=None (lineage walk skipped) — so BOTH cache-identity resolvers keyed it

@@ -414,3 +414,26 @@ def test_a_resumed_compressor_prices_no_stored_rejected_thinking_in_its_tail(tmp
         return compressor._walk_tail_budget(history, 0, 10**9, 0, cut_at_break=False)[1]
 
     assert tail_tokens(8000) == tail_tokens(1)
+
+
+def test_a_same_route_fork_starts_from_a_copy_of_its_parents_rejected_thinking(tmp_path):
+    """A review fork has no session store, so it would resend the thinking Anthropic rejected for
+    its parent. It inherits the parent's fingerprints, and its own rejections stay its own."""
+    from agent.anthropic_thinking_replay import (
+        apply_rejected_thinking_suppression, inherit_rejected_thinking, remember_rejected_thinking,
+    )
+
+    db = _session_db(tmp_path, "s1")
+    parent, history = _agent(db), _signed_turn("Q1", "A1", "sig_rejected_1")
+    _reject_signatures(parent, history)
+    fork = _agent(db)
+    fork._session_db = fork.persistence = None
+    fork._persist_disabled = True
+
+    inherit_rejected_thinking(fork, parent)
+    request = copy.deepcopy(history)
+    assert apply_rejected_thinking_suppression(fork, request)
+    assert not _thinking_blocks(convert_messages_to_anthropic(request, model=fork.model)[1])
+
+    remember_rejected_thinking(fork, _signed_turn("Q2", "A2", "sig_fork_only"))
+    assert fork._anthropic_rejected_thinking[1] > parent._anthropic_rejected_thinking[1]

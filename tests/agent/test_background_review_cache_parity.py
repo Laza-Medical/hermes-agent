@@ -584,3 +584,28 @@ def test_routed_fork_does_not_inherit_cache_scope():
         "Routed fork must not inherit the parent's cache scope — its prefix "
         "is cache-cold on the different model regardless."
     )
+
+
+def test_same_route_fork_inherits_a_copy_of_rejected_thinking_and_a_routed_fork_does_not():
+    """A same-route fork replays the parent's history, so it starts from the parent's rejected
+    thinking fingerprints. A routed fork sends another model's request and starts clean."""
+    import run_agent
+    from agent.background_review import build_cache_parity_fork
+
+    agent = _make_agent_stub(run_agent.AIAgent)
+    agent.provider, agent.api_mode = "anthropic", "anthropic_messages"
+    agent.base_url, agent.model = "https://api.anthropic.com", "claude-opus-4-6"
+    agent._anthropic_rejected_thinking = ("sess-123", {"fingerprint"})
+
+    with patch.object(run_agent, "AIAgent", _make_recorder_class()):
+        fork, _rt, routed = build_cache_parity_fork(agent, max_iterations=5)
+    assert not routed
+    assert fork._anthropic_rejected_thinking == agent._anthropic_rejected_thinking
+    assert fork._anthropic_rejected_thinking[1] is not agent._anthropic_rejected_thinking[1]
+
+    with patch.object(run_agent, "AIAgent", _make_recorder_class()), \
+         patch("agent.background_review._resolve_review_runtime",
+               lambda *a, **k: {"routed": True, "model": "other-model"}):
+        fork, _rt, routed = build_cache_parity_fork(agent, max_iterations=5)
+    assert routed
+    assert getattr(fork, "_anthropic_rejected_thinking", None) is None
