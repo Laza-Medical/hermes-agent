@@ -15,6 +15,8 @@ _USER_ASK = re.compile(
     r"(?:^|,\s+so\s+)(?:tell me|say|let me know|confirm|approve|pick|choose|reply|send me)\b|"
     r"\b(?:your (?:call|word|approval|answer)|you decide|waiting on you)\b"
 )
+# "any that turn out to be your call" names a decision that may come later, not one the reply waits on.
+_LATER_ASK = re.compile(r"\bany(?:thing)? (?:that|which) [^,;]*?\byour (?:call|word|approval|answer)\b")
 _WAIT = re.compile(r"\b(?:when|once|after|until|as soon as|if|unless)\b")
 _WORK_VERB = r"apply|bring|build|check|cut|draft|edit|inspect|pick|read|review|run|test|update|write"
 _FUTURE = r"\bi(?: will|'ll)\s+"
@@ -24,6 +26,7 @@ _COMMITMENT = re.compile(
     r"\bnow[,:]?\s+i(?:'ll| will)\s+" + _NOT_OR_WAIT + r"\w+|"
     + _FUTURE + rf"(?:{_WORK_VERB})\b|"
     + _FUTURE + _NOT_OR_WAIT + r"(?:now\b|[^,;.!?]*?\bnext\b)|"
+    r"\bi(?:'m| am)\s+(?:starting|continuing)\b(?!\s+to\b)|"
     r"\bthe (?:[\w-]+\s+)+is next\b"
 )
 
@@ -49,7 +52,7 @@ def announced_next_step_after_work(text: str) -> bool:
     paragraph = re.sub(r"(?m)^\s*(?:\d+[.)]|[-*•])\s+", ". ", paragraph)
     paragraph = " ".join(paragraph.split())
     sentences = [s.strip() for s in re.split(r"[.!?]+(?:\s+|$)", paragraph)]
-    if any(_USER_ASK.search(s) for s in sentences):
+    if any(_USER_ASK.search(_LATER_ASK.sub(" ", s)) for s in sentences):
         return False
     return any(_commits(c) for s in sentences for c in re.split(r",\s+(?:and|but)\s+|;", s))
 

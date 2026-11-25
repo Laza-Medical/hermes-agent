@@ -213,3 +213,31 @@ def test_resent_reply(loop_agent, caplog):
     assert [m['content'] for m in result['messages'] if m['role'] == 'user'][1:] == [_NEXT_STEP_NUDGE]
     assert loop_agent.client.chat.completions.create.call_count == 3
     assert sum(r.getMessage().startswith('Next-step guard:') for r in caplog.records) == 1
+
+
+# Two replies that ended a turn with the work still undone. Each defers a possible later decision
+# ("any that are your call"), and the second reports progress in the present tense.
+LATER_ASK = [
+    'Next I fold the findings into draft 3, bring you any that turn out to be your call, and send one follow-up '
+    'review. The fold is a long read, and this session is close to its compaction point, so I saved the state in '
+    'the workbench Trail first. I am starting the fold now.',
+    'Draft 2 is kept unchanged beside it. I am continuing with the remaining findings and will come back with any '
+    'that are your call.',
+]
+
+
+@pytest.mark.parametrize('text', LATER_ASK, ids=['next-fold', 'continuing'])
+def test_later_ask_does_not_veto(text):
+    assert 'your call' in text
+    assert announced_next_step_after_work(text)
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('I am starting the fold now.', True), ("I'm continuing with the remaining findings.", True),
+    ('I am starting to think the spec is wrong.', False), ('I am continuing to see the same failure.', False),
+    ('I am not continuing the fold.', False),
+    ('The second finding is your call. I am continuing with the fold.', False),
+    ('I am continuing with the fold, and the rename is your call.', False),
+])
+def test_present_progress(text, expected):
+    assert announced_next_step_after_work(text) is expected
