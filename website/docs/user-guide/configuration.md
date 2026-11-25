@@ -2346,7 +2346,7 @@ agent:
 
 The same gate also enables **result-reference stubbing**: when a re-issued identical tool call returns a byte-identical fresh result, the duplicate payload enters context as a short reference stub pointing at the earlier result (tool name, `tool_call_id`, an args summary, and — if the first result was persisted to disk — its spillover path) instead of repeating the full output. The tool still executes every time, so polling semantics are preserved: a changed result always flows through whole. Results under 512 characters, error results, and multimodal results are never stubbed, and pollers *are* stubbed (an unchanged poll is exactly the case where the duplicate payload carries no information).
 
-After tool work, Hermes checks whether the reply ends with the model naming a next step of its own and prompts it to act or explain what it is waiting for. A false positive costs one extra model call, and the reply is sent a second time. Setting `agent.stall_guards` to `false` turns this check off with the other guards in this section.
+After tool work, Hermes checks whether the reply ends with the model naming a next step of its own and prompts it to act or explain what it is waiting for. A false positive costs one extra model call, and Hermes keeps the reply and adds one sentence from the model after it. Setting `agent.stall_guards` to `false` turns this check off with the other guards in this section.
 
 ### Turn liveness watchdog
 

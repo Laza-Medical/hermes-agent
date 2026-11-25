@@ -5,6 +5,7 @@ import pytest
 
 from agent.agent_runtime_helpers import looks_like_degenerate_final, tool_results_this_turn, trailing_continue_intent
 from agent.context_compressor import ContextCompressor
+from agent.conversation_loop import _CODEX_ACK_CONTINUATION_NUDGE
 from agent.turn_final_continuation import _NEXT_STEP_NUDGE, announced_next_step_after_work, choose_continuation
 from tests.agent import test_degenerate_final_recovery as recovery
 
@@ -151,10 +152,12 @@ def test_two_replies(loop_agent, caplog):
     rows = result['messages']
     interim = next(i for i, m in enumerate(rows) if m.get('content') == first)
     assert tool_results_this_turn(rows[:interim]) == 1
+    joined = first + '\n\n' + second
     assert [(m['role'], m['content']) for m in rows[interim:]] == [
-        ('assistant', first), ('user', _NEXT_STEP_NUDGE), ('assistant', second)]
+        ('assistant', first), ('user', _NEXT_STEP_NUDGE), ('assistant', joined)]
+    assert rows[-1]['api_content'] == second
     assert tool_results_this_turn(rows) == 0
-    assert result['final_response'] == second
+    assert result['final_response'] == joined
     assert loop_agent.client.chat.completions.create.call_count == 3
     assert any(r.levelname == 'INFO' and r.message.startswith('Next-step guard:') for r in caplog.records)
 
@@ -166,8 +169,10 @@ def test_report_delivery_and_log(loop_agent, caplog):
     loop_agent.interim_assistant_callback = lambda text, **kw: seen.append(text)
     with caplog.at_level('INFO'):
         result = recovery._run(loop_agent, [recovery._tool_round('call_1'), recovery._final(first), recovery._final(second)])
-    assert first in seen and second not in seen
+    assert seen.count(first) == 1 and second not in seen
     assert result['final_response'] == second
+    assert result['messages'][-1]['content'] == second
+    assert 'api_content' not in result['messages'][-1]
     assert [m['role'] for m in result['messages']] == ['user', 'assistant', 'tool', 'assistant', 'user', 'assistant']
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith('Next-step guard:')]
     assert lines == [f'Next-step guard: {len(first)}-char reply named a next step after 1 tool result(s) — re-prompting (1/2)']
@@ -204,15 +209,78 @@ def test_user_asks(ask):
 
 def test_resent_reply(loop_agent, caplog):
     report = FIRE[3]
-    resent = report + ' It waits on the review card.'
+    resent = report.replace(' is next', '\n  is next') + ' It waits on the review card.'
     loop_agent.valid_tool_names = {'web_search'}
     assert announced_next_step_after_work(resent) and not trailing_continue_intent(resent)
     with caplog.at_level('INFO'):
         result = recovery._run(loop_agent, [recovery._tool_round('call_1'), recovery._final(report), recovery._final(resent)])
-    assert result['final_response'] == resent and result['final_response'].startswith(report)
+    assert result['final_response'] == resent
     assert [m['content'] for m in result['messages'] if m['role'] == 'user'][1:] == [_NEXT_STEP_NUDGE]
     assert loop_agent.client.chat.completions.create.call_count == 3
     assert sum(r.getMessage().startswith('Next-step guard:') for r in caplog.records) == 1
+
+
+def test_tool_call_after_nudge(loop_agent):
+    loop_agent.valid_tool_names = {'web_search'}
+    reply = 'The workbook has three sheets.'
+    result = recovery._run(loop_agent, [recovery._tool_round('call_1'), recovery._final(FIRE[3]),
+                                        recovery._tool_round('call_2'), recovery._final(reply)])
+    assert recovery._user_rows_sent(loop_agent, 2)[-1] == (
+        '[System: Your last message named a next step and made no tool call. If that step is yours to do now, '
+        'and it waits on no answer from the user and on no result that has not arrived, do it now with tool calls. '
+        'Otherwise reply with one sentence that says what the step waits on, or that the work is finished. '
+        'Do not repeat your last message. It is kept, and your sentence is added after it.]')
+    assert result['final_response'] == result['messages'][-1]['content'] == reply
+    assert 'api_content' not in result['messages'][-1]
+
+
+def test_second_nudge(loop_agent):
+    loop_agent.valid_tool_names = {'web_search'}
+    report, reply = FIRE[3], 'The workbook is finished.'
+    result = recovery._run(loop_agent, [recovery._tool_round('call_1'), recovery._final(report),
+                                        recovery._final('Next, I will draft it.'), recovery._final(reply)])
+    assert recovery._user_rows_sent(loop_agent, 3)[-2:] == [_NEXT_STEP_NUDGE, _CODEX_ACK_CONTINUATION_NUDGE]
+    assert result['final_response'] == result['messages'][-1]['content'] == report + '\n\n' + reply
+    assert result['messages'][-1]['api_content'] == reply
+
+
+def test_prior_turn_nudge_does_not_join(loop_agent):
+    history = [{'role': 'user', 'content': 'Inspect the workbook.'},
+               {'role': 'assistant', 'content': 'The workbook contains two sheets.'},
+               {'role': 'user', 'content': _NEXT_STEP_NUDGE},
+               {'role': 'assistant', 'content': 'The inspection is finished.'}]
+    reply = 'The second sheet contains totals.'
+    loop_agent.client.chat.completions.create.side_effect = [recovery._final(reply)]
+    result = loop_agent.run_conversation('What does the second sheet contain?', conversation_history=history)
+    assert result['final_response'] == result['messages'][-1]['content'] == reply
+    assert 'api_content' not in result['messages'][-1]
+
+
+def test_disabled_guard_keeps_plain_report(loop_agent):
+    loop_agent.valid_tool_names = {'web_search'}
+    loop_agent._stall_guards = False
+    result = recovery._run(loop_agent, [recovery._tool_round('call_1'), recovery._final(FIRE[3])])
+    assert loop_agent.client.chat.completions.create.call_count == 2
+    assert result['final_response'] == result['messages'][-1]['content'] == FIRE[3]
+    assert 'api_content' not in result['messages'][-1]
+
+
+def test_transform_receives_joined_report(loop_agent, monkeypatch):
+    loop_agent.valid_tool_names = {'web_search'}
+    report, reply = FIRE[3], 'The workbook is finished.'
+    seen = []
+
+    def hook(name, logger, **payload):
+        if name == 'transform_llm_output':
+            seen.append(payload['response_text'])
+            return ['Edited workbook summary.']
+        return []
+
+    monkeypatch.setattr('agent.turn_finalizer._invoke_hook_safely', hook)
+    result = recovery._run(loop_agent, [recovery._tool_round('call_1'), recovery._final(report), recovery._final(reply)])
+    assert seen == [report + '\n\n' + reply]
+    assert result['final_response'] == result['messages'][-1]['content'] == 'Edited workbook summary.'
+    assert 'api_content' not in result['messages'][-1]
 
 
 # Two replies that ended a turn with the work still undone. Each defers a possible later decision

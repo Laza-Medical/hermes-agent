@@ -7,8 +7,8 @@ from typing import Any, NamedTuple, Optional
 _NEXT_STEP_NUDGE = (
     "[System: Your last message named a next step and made no tool call. If that step is yours to do now, "
     "and it waits on no answer from the user and on no result that has not arrived, do it now with tool calls. "
-    "Otherwise send your last message again exactly as it was, and if a step waits, add one sentence that says "
-    "what it waits on.]"
+    "Otherwise reply with one sentence that says what the step waits on, or that the work is finished. "
+    "Do not repeat your last message. It is kept, and your sentence is added after it.]"
 )
 
 _USER_ASK = re.compile(
@@ -55,6 +55,38 @@ def announced_next_step_after_work(text: str) -> bool:
     if any(_USER_ASK.search(_LATER_ASK.sub(" ", s)) for s in sentences):
         return False
     return any(_commits(c) for s in sentences for c in re.split(r",\s+(?:and|but)\s+|;", s))
+
+
+def join_nudged_report(agent, messages, reply: str) -> str:
+    """Keep the first pending report across continuation nudges in this turn."""
+    from agent.conversation_loop import _CODEX_ACK_CONTINUATION_NUDGE, _DEGENERATE_FINAL_NUDGE
+
+    if not getattr(agent, "_stall_guards", True):
+        return reply
+    report_row = None
+    for index in range(len(messages) - 1, -1, -1):
+        row = messages[index]
+        if row.get("role") == "tool":
+            break
+        if row.get("role") != "user":
+            continue
+        content = row.get("content")
+        if content == _NEXT_STEP_NUDGE:
+            report_row = messages[index - 1] if index else None
+        elif content not in (_CODEX_ACK_CONTINUATION_NUDGE, _DEGENERATE_FINAL_NUDGE):
+            break
+    if report_row and report_row.get("role") == "assistant":
+        report = agent._interim_assistant_visible_text(report_row)
+        if (report and not agent._interim_text_was_delivered(report)
+                and " ".join(report.split()) not in " ".join(reply.split())):
+            return report + "\n\n" + reply
+    return reply
+
+
+def store_joined_report(final_msg, reply, final_response, transformed):
+    if not transformed and reply != final_response:
+        final_msg.setdefault("api_content", final_msg["content"])
+        final_msg["content"] = final_response
 
 
 def choose_continuation(

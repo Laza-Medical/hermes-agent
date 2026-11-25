@@ -208,7 +208,7 @@ def finish_text_response(
     # heal threshold, deliver the queued notice through the status/warning callback — the normal out-of-band
     # delivery channel (gateway status message / CLI print). NEVER appended to messages/api_messages:
     # conversation context and the cached prompt prefix stay byte-identical.
-    from agent.turn_final_continuation import choose_continuation
+    from agent.turn_final_continuation import choose_continuation, join_nudged_report, store_joined_report
 
     _continuation = choose_continuation(
         agent, final_response=final_response, promoted=_promoted, messages=messages,
@@ -343,6 +343,8 @@ def finish_text_response(
     # the stored/replayed transcript (#44239). finalize_turn reads the recorded outcome; like
     # there, an interrupted turn keeps the raw text.
     from agent.turn_finalizer import apply_llm_output_transform
+    reply = final_response
+    final_response = join_nudged_report(agent, messages, reply)
     _transformed = False
     if not getattr(agent, "_interrupt_requested", False):
         final_response, _transformed, _ = apply_llm_output_transform(
@@ -353,6 +355,7 @@ def finish_text_response(
             final_msg["api_content"] = final_response
         else:
             final_msg["content"] = final_response
+    store_joined_report(final_msg, reply, final_response, _transformed)
     publish_held_final_row(agent, final_msg, final_response, _joined)
 
     append_message(messages, final_msg)
