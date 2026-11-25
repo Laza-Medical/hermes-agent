@@ -8,6 +8,7 @@ from agent.context_compressor import ContextCompressor
 from agent.conversation_loop import _CODEX_ACK_CONTINUATION_NUDGE
 from agent.turn_final_continuation import _NEXT_STEP_NUDGE, announced_next_step_after_work, choose_continuation
 from tests.agent import test_degenerate_final_recovery as recovery
+from tests.agent import test_run_agent_codex_responses as codex
 
 loop_agent = recovery.loop_agent
 
@@ -281,6 +282,33 @@ def test_transform_receives_joined_report(loop_agent, monkeypatch):
     assert seen == [report + '\n\n' + reply]
     assert result['final_response'] == result['messages'][-1]['content'] == 'Edited workbook summary.'
     assert 'api_content' not in result['messages'][-1]
+
+
+def test_commentary_row_joins_its_content(monkeypatch):
+    agent = codex._build_agent(monkeypatch)
+    monkeypatch.setattr('model_tools.handle_function_call', lambda *a, **k: 'ok')
+    report, reply = FIRE[3], 'It waits on the review card.'
+    stalled = codex._codex_commentary_final_tool_response('I checked the folder.', report)
+    stalled.output.pop()  # commentary and the final answer, no tool call
+    replies = [codex._codex_tool_call_response(), stalled, codex._codex_message_response(reply)]
+    seen = []
+    agent.interim_assistant_callback = lambda text, **kw: seen.append(text)
+    monkeypatch.setattr(agent, '_interruptible_api_call', lambda api_kwargs: replies.pop(0))
+    result = agent.run_conversation('build the workbook')
+    assert seen == ['I checked the folder.']
+    assert result['final_response'] == result['messages'][-1]['content'] == report + '\n\n' + reply
+    assert result['messages'][-1]['api_content'] == reply
+
+
+def test_promoted_reply_keeps_empty_content(loop_agent, monkeypatch):
+    monkeypatch.setattr('agent.turn_final_response.answer_in_reasoning_capability', lambda agent: True)
+    loop_agent.valid_tool_names = {'web_search'}
+    report, reply = FIRE[3], 'The step waits on the review card.'
+    promoted = recovery._final('')
+    promoted.choices[0].message.reasoning = reply
+    result = recovery._run(loop_agent, [recovery._tool_round('call_1'), recovery._final(report), promoted])
+    assert result['final_response'] == report + '\n\n' + reply
+    assert not result['messages'][-1]['content'] and result['messages'][-1]['api_content'] == reply
 
 
 # Two replies that ended a turn with the work still undone. Each defers a possible later decision

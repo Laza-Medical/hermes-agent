@@ -4,6 +4,9 @@ from __future__ import annotations
 import re
 from typing import Any, NamedTuple, Optional
 
+from agent.memory_context import fence_recalled_context
+from session_rules.turns import flatten_message_text
+
 _NEXT_STEP_NUDGE = (
     "[System: Your last message named a next step and made no tool call. If that step is yours to do now, "
     "and it waits on no answer from the user and on no result that has not arrived, do it now with tool calls. "
@@ -59,10 +62,8 @@ def announced_next_step_after_work(text: str) -> bool:
 
 def join_nudged_report(agent, messages, reply: str) -> str:
     """Keep the first pending report across continuation nudges in this turn."""
-    from agent.conversation_loop import _CODEX_ACK_CONTINUATION_NUDGE, _DEGENERATE_FINAL_NUDGE
+    from agent.conversation_loop import _CODEX_ACK_CONTINUATION_NUDGE
 
-    if not getattr(agent, "_stall_guards", True):
-        return reply
     report_row = None
     for index in range(len(messages) - 1, -1, -1):
         row = messages[index]
@@ -73,10 +74,13 @@ def join_nudged_report(agent, messages, reply: str) -> str:
         content = row.get("content")
         if content == _NEXT_STEP_NUDGE:
             report_row = messages[index - 1] if index else None
-        elif content not in (_CODEX_ACK_CONTINUATION_NUDGE, _DEGENERATE_FINAL_NUDGE):
+        elif content != _CODEX_ACK_CONTINUATION_NUDGE:
             break
     if report_row and report_row.get("role") == "assistant":
-        report = agent._interim_assistant_visible_text(report_row)
+        # The report is the row's content. Interim delivery shows a Codex row's commentary instead,
+        # so a row with commentary was never delivered and its content is joined.
+        report = fence_recalled_context(
+            agent._strip_think_blocks(flatten_message_text(report_row.get("content"))).strip())
         if (report and not agent._interim_text_was_delivered(report)
                 and " ".join(report.split()) not in " ".join(reply.split())):
             return report + "\n\n" + reply
@@ -84,7 +88,8 @@ def join_nudged_report(agent, messages, reply: str) -> str:
 
 
 def store_joined_report(final_msg, reply, final_response, transformed):
-    if not transformed and reply != final_response:
+    # A promoted-reasoning row keeps its content empty (#111761): only a row with content is rewritten.
+    if not transformed and reply != final_response and final_msg.get("content"):
         final_msg.setdefault("api_content", final_msg["content"])
         final_msg["content"] = final_response
 
